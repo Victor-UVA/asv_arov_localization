@@ -62,6 +62,7 @@ class AROV_EKF_Global(Node):
                                'pitch_roll': np.array(self.get_parameter('~roll_pitch_noise').value),
                                'apriltag': np.array(self.get_parameter('~apriltag').value)}
 
+        self.predict_timer = self.create_timer(0.04, self.predict)
         self.pub_timer = self.create_timer(0.02, self.publish_transform)
 
     def publish_transform(self):
