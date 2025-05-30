@@ -10,6 +10,8 @@ from tf2_ros import TransformBroadcaster, TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
 
+from scipy.spatial.transform import Rotation
+
 class AROV_EKF_Global(Node):
     '''
     Node to run global position estimate for the AROV using fixed, known AprilTag locations.
@@ -21,10 +23,10 @@ class AROV_EKF_Global(Node):
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),       # 
             ('~predict_noise', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),     # Diagonals of the covariance matrix for prediction noise (if there should
                                                                     # be non-zero covariance, change where this parameter is used from diag to array)
-            ('~depth_noise', [0, 0, 1.0, 0, 0, 0]),                 # Sensor noise values.  Should be the same dimensions as the states
-            ('~compass_noise', [0, 0, 0, 0, 0, 1.0]),
-            ('~roll_pitch_noise', [0, 0, 0, 1.0, 1.0, 0]),
-            ('~apriltag_noise', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0])
+            ('~depth_noise', [1.0]),                                # Sensor noise values. TODO Should it be the same dimensions as the states?
+            ('~compass_noise', [1.0]),
+            ('~roll_pitch_noise', [1.0, 1.0]),
+            ('~apriltag_noise', [0.1, 0.1, 0.1])
         ])
 
         self.arov = self.get_parameter('~vehicle_name').value
@@ -57,33 +59,35 @@ class AROV_EKF_Global(Node):
         self.state = None                                                                       # State estimate: x, y, z, roll, pitch, yaw
         self.cov = np.diag(self.get_parameter('~initial_cov').value)                            # Covariance estimate
         self.predict_noise = np.diag(self.get_parameter('~predict_noise').value)
-        self. correct_noise = {'depth': np.array(self.get_parameter('~depth_noise').value),
-                               'compass': np.array(self.get_parameter('~compass_noise').value),
-                               'pitch_roll': np.array(self.get_parameter('~roll_pitch_noise').value),
-                               'apriltag': np.array(self.get_parameter('~apriltag').value)}
+        self. correct_noise = {'depth': np.diag(self.get_parameter('~depth_noise').value),
+                               'compass': np.diag(self.get_parameter('~compass_noise').value),
+                               'pitch_roll': np.diag(self.get_parameter('~roll_pitch_noise').value),
+                               'apriltag': np.diag(self.get_parameter('~apriltag_noise').value)}
 
         self.predict_timer = self.create_timer(0.04, self.predict)
         self.pub_timer = self.create_timer(0.02, self.publish_transform)
 
     def publish_transform(self):
+        if self.state is None: return
+        
         self.transform.header.stamp = self.get_clock().now().to_msg()
 
         try:
-            map_to_odom = self.tf_buffer.lookup_transform(
+            odom_to_base_link = self.tf_buffer.lookup_transform(
                 f'{self.arov}/odom',
-                'map',
+                f'{self.arov}/base_link',
                 rclpy.time.Time())
             
-            self.transform.transform.translation.x = self.state[0] - map_to_odom.transform.translation.x
-            self.transform.transform.translation.y = self.state[1] - map_to_odom.transform.translation.y
-            self.transform.transform.translation.z = self.state[2] - map_to_odom.transform.translation.z
-            self.transform.transform.rotation.x = self.state[3] - map_to_odom.transform.rotation.x
-            self.transform.transform.rotation.y = self.state[4] - map_to_odom.transform.rotation.y
-            self.transform.transform.rotation.z = self.state[5] - map_to_odom.transform.rotation.z
+            self.transform.transform.translation.x = self.state[0] - odom_to_base_link.transform.translation.x
+            self.transform.transform.translation.y = self.state[1] - odom_to_base_link.transform.translation.y
+            self.transform.transform.translation.z = self.state[2] - odom_to_base_link.transform.translation.z
+            self.transform.transform.rotation.x = self.state[3] - odom_to_base_link.transform.rotation.x
+            self.transform.transform.rotation.y = self.state[4] - odom_to_base_link.transform.rotation.y
+            self.transform.transform.rotation.z = self.state[5] - odom_to_base_link.transform.rotation.z
 
         except TransformException as ex:
             self.get_logger().info(
-                f'Could not transform map to odom: {ex}')
+                f'Could not transform odom to base_link: {ex}')
             return
 
         self.tf_broadcaster.sendTransform(self.transform)
@@ -95,8 +99,8 @@ class AROV_EKF_Global(Node):
         self.correct('compass', [False, False, False, False, False, True], np.array([0, 0, 0, 0, 0, msg.pose.pose.orientation.z]),
                      np.array([0, 0, 0, 0, 0, 1]))
         self.correct('pitch_roll', [False, False, False, True, True, False], np.array([0, 0, 0, msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, 0]),
-                     np.array([0, 0, 0, 0, 1, 0],
-                              [0, 0, 0, 0, 0, 1]))
+                     np.array([[0, 0, 0, 0, 1, 0],
+                               [0, 0, 0, 0, 0, 1]]))
 
     def arov_apriltag_detect_callback(self, msg: AprilTagDetectionArray):
         # TODO Add correct for orientation from AprilTags
@@ -106,18 +110,28 @@ class AROV_EKF_Global(Node):
                 
                 try:
                     base_link_to_tag = self.tf_buffer.lookup_transform(
-                        tag_frame,
                         f'{self.arov}/base_link',
+                        tag_frame,
                         rclpy.time.Time())
                     
                     map_to_tag = self.tf_buffer.lookup_transform(
-                        tag_frame,
                         'map',
+                        f'{tag_frame}_true',
                         rclpy.time.Time())
 
-                    observation = np.array([map_to_tag.transform.translation.x - base_link_to_tag.transform.translation.x,
-                                            map_to_tag.transform.translation.y - base_link_to_tag.transform.translation.y,
-                                            map_to_tag.transform.translation.z - base_link_to_tag.transform.translation.z,
+                    base_link_to_map = self.tf_buffer.lookup_transform(
+                        f'{self.arov}/base_link',
+                        'map',
+                        rclpy.time.Time())
+                    
+                    tag_in_map = Rotation.from_quat([base_link_to_map.transform.rotation.x, base_link_to_map.transform.rotation.y,
+                                                     base_link_to_map.transform.rotation.z, base_link_to_map.transform.rotation.w])\
+                                                    .apply(np.array([base_link_to_tag.transform.translation.x, base_link_to_tag.transform.translation.y, 
+                                                                     base_link_to_tag.transform.translation.z]), True)
+
+                    observation = np.array([map_to_tag.transform.translation.x - tag_in_map[0],
+                                            map_to_tag.transform.translation.y - tag_in_map[1],
+                                            map_to_tag.transform.translation.z - tag_in_map[2],
                                             0, 0, 0])
                     
                     h_jacobian = np.array([[1, 0, 0, 0, 0, 0],
@@ -141,10 +155,12 @@ class AROV_EKF_Global(Node):
             - Orientation
             - Delta time
         '''
-        if self.state == None:
-            if self.odom != None:
+        if self.state is None:
+            if self.odom is not None:
+                orientation = Rotation.from_quat([self.odom.pose.pose.orientation.x, self.odom.pose.pose.orientation.y,
+                                                  self.odom.pose.pose.orientation.z, self.odom.pose.pose.orientation.w]).as_euler('xyz')
                 self.state = np.array([self.odom.pose.pose.position.x, self.odom.pose.pose.position.y, self.odom.pose.pose.position.z,
-                                       self.odom.pose.pose.orientation.x, self.odom.pose.pose.orientation.y, self.odom.pose.pose.orientation.z])
+                                       *orientation])
                 self.time_km1 = self.get_clock().now().nanoseconds
             return
         
@@ -171,12 +187,17 @@ class AROV_EKF_Global(Node):
             observation (ndarray): The observation being used to correct the state estimate.  Dimensions should match the states being estimated.
             h_jacobian (ndarray): The jacobian of the observation function.
         '''
-        err = np.array(state_mask, dtype=int) * (observation - self.state)
-        err_cov = h_jacobian @ self.cov @ h_jacobian.transpose() + self.correct_noise[observation_name]
-        K_gain = (self.cov @ h_jacobian.transpose()) @ err_cov.inv()
+        if self.state is None: return
 
-        self.state += (K_gain * err)
-        self.cov = (np.eye(np.shape(self.cov)[0]) - K_gain @ h_jacobian) @ self.cov
+        err = np.atleast_2d(np.extract(state_mask, observation - self.state)).transpose()
+        err_cov = (h_jacobian @ self.cov @ h_jacobian.transpose()) + self.correct_noise[observation_name]
+        K_gain = (self.cov @ np.atleast_2d(h_jacobian).transpose()) @ np.linalg.inv(err_cov)
+
+        state_correction = np.zeros_like(self.state)
+        np.place(state_correction, state_mask, K_gain @ err)
+
+        self.state += state_correction
+        self.cov = (np.eye(np.shape(self.cov)[0]) - K_gain @ np.atleast_2d(h_jacobian)) @ self.cov
 
 
 def main():    
