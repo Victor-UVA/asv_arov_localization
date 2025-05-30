@@ -103,7 +103,10 @@ class AROV_EKF_Global(Node):
                                [0, 0, 0, 0, 0, 1]]))
 
     def arov_apriltag_detect_callback(self, msg: AprilTagDetectionArray):
-        # TODO Add correct for orientation from AprilTags
+        '''
+        Runs full state correction using AprilTag detections whenever one or more AprilTags are observed.  Assumes a map of true AprilTag transforms
+        is provided (can be static or dynamic).
+        '''
         if msg.detections:
             for tag in msg.detections:
                 tag_frame = f'{tag.family}:{tag.id}'
@@ -124,6 +127,12 @@ class AROV_EKF_Global(Node):
                         'map',
                         rclpy.time.Time())
                     
+                    observed_orientation = (Rotation.from_quat([map_to_tag.transform.rotation.x, map_to_tag.transform.rotation.y,
+                                                                map_to_tag.transform.rotation.z, map_to_tag.transform.rotation.w]) * \
+                                            Rotation.from_quat([base_link_to_tag.transform.rotation.x, base_link_to_tag.transform.rotation.y,
+                                                                base_link_to_tag.transform.rotation.z, base_link_to_tag.transform.rotation.w]).inv())\
+                                                                .as_euler('xyz')
+                    
                     tag_in_map = Rotation.from_quat([base_link_to_map.transform.rotation.x, base_link_to_map.transform.rotation.y,
                                                      base_link_to_map.transform.rotation.z, base_link_to_map.transform.rotation.w])\
                                                     .apply(np.array([base_link_to_tag.transform.translation.x, base_link_to_tag.transform.translation.y, 
@@ -132,13 +141,16 @@ class AROV_EKF_Global(Node):
                     observation = np.array([map_to_tag.transform.translation.x - tag_in_map[0],
                                             map_to_tag.transform.translation.y - tag_in_map[1],
                                             map_to_tag.transform.translation.z - tag_in_map[2],
-                                            0, 0, 0])
+                                            *observed_orientation])
                     
                     h_jacobian = np.array([[1, 0, 0, 0, 0, 0],
                                            [0, 1, 0, 0, 0, 0],
-                                           [0, 0, 1, 0, 0, 0]])
+                                           [0, 0, 1, 0, 0, 0],
+                                           [0, 0, 0, 1, 0, 0],
+                                           [0, 0, 0, 0, 1, 0],
+                                           [0, 0, 0, 0, 0, 1]])
 
-                    self.correct('apriltag', [True, True, True, False, False, False], observation, h_jacobian)
+                    self.correct('apriltag', [True, True, True, True, True, True], observation, h_jacobian)
 
                 except TransformException as ex:
                     self.get_logger().info(
@@ -198,6 +210,9 @@ class AROV_EKF_Global(Node):
 
         self.state += state_correction
         self.cov = (np.eye(np.shape(self.cov)[0]) - K_gain @ np.atleast_2d(h_jacobian)) @ self.cov
+
+        # Normalize rotations between -pi to pi
+        self.state[2:] = np.arctan2(np.sin(self.state[2:]), np.cos(self.state[2:]))
 
 
 def main():    
