@@ -26,7 +26,7 @@ class AROV_EKF_Global(Node):
             ('~depth_noise', [1.0]),                                # Sensor noise values. TODO Should it be the same dimensions as the states?
             ('~compass_noise', [1.0]),
             ('~roll_pitch_noise', [1.0, 1.0]),
-            ('~apriltag_noise', [0.1, 0.1, 0.1])
+            ('~apriltag_noise', [0.1, 0.1, 0.1, 0.1, 0.1, 0.1])
         ])
 
         self.arov = self.get_parameter('~vehicle_name').value
