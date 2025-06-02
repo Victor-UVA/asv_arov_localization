@@ -23,7 +23,7 @@ class AROV_EKF_Global(Node):
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),       # 
             ('~predict_noise', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),     # Diagonals of the covariance matrix for prediction noise (if there should
                                                                     # be non-zero covariance, change where this parameter is used from diag to array)
-            ('~depth_noise', [1.0]),                                # Sensor noise values. TODO Should it be the same dimensions as the states?
+            ('~depth_noise', [1.0]),                                # Sensor noise values.
             ('~compass_noise', [1.0]),
             ('~roll_pitch_noise', [1.0, 1.0]),
             ('~apriltag_noise', [0.1, 0.1, 0.1, 0.01, 0.01, 0.01])
@@ -78,31 +78,31 @@ class AROV_EKF_Global(Node):
                 f'{self.arov}/base_link',
                 rclpy.time.Time())
             
-            orientation = Rotation.from_euler('xyz', self.state[3:]) * Rotation.from_quat([odom_to_base_link.transform.rotation.w,
-                                                                                           odom_to_base_link.transform.rotation.x,
+            orientation = Rotation.from_euler('xyz', self.state[3:]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
                                                                                            odom_to_base_link.transform.rotation.y,
-                                                                                           odom_to_base_link.transform.rotation.z]).inv()
+                                                                                           odom_to_base_link.transform.rotation.z,
+                                                                                           odom_to_base_link.transform.rotation.w]).inv()
             
-            translation = self.state[:3] - orientation.inv().apply(np.array([odom_to_base_link.transform.translation.x,
-                                                                             odom_to_base_link.transform.translation.y,
-                                                                             odom_to_base_link.transform.translation.z]))
+            translation = self.state[:3] - orientation.apply(np.array([odom_to_base_link.transform.translation.x,
+                                                                       odom_to_base_link.transform.translation.y,
+                                                                       odom_to_base_link.transform.translation.z]), False)
 
             orientation = orientation.as_quat()
 
             self.transform.transform.translation.x = translation[0]
             self.transform.transform.translation.y = translation[1]
             self.transform.transform.translation.z = translation[2]
-            self.transform.transform.rotation.w = orientation[0]
-            self.transform.transform.rotation.x = orientation[1]
-            self.transform.transform.rotation.y = orientation[2]
-            self.transform.transform.rotation.z = orientation[3]
+            self.transform.transform.rotation.x = orientation[0]
+            self.transform.transform.rotation.y = orientation[1]
+            self.transform.transform.rotation.z = orientation[2]
+            self.transform.transform.rotation.w = orientation[3]
+
+            self.tf_broadcaster.sendTransform(self.transform)
 
         except TransformException as ex:
             self.get_logger().info(
                 f'Could not transform odom to base_link: {ex}')
             return
-
-        self.tf_broadcaster.sendTransform(self.transform)
 
     def arov_pose_callback(self, msg: Odometry):
         self.odom = msg
@@ -128,50 +128,27 @@ class AROV_EKF_Global(Node):
                         f'{self.arov}/base_link',
                         tag_frame,
                         rclpy.time.Time())
-                    
-                    tag_to_base_link = self.tf_buffer.lookup_transform(
-                        tag_frame,
-                        f'{self.arov}/base_link',
-                        rclpy.time.Time())
 
                     map_to_tag = self.tf_buffer.lookup_transform(
                         'map',
                         f'{tag_frame}_true',
                         rclpy.time.Time())
-
-                    base_link_to_map = self.tf_buffer.lookup_transform(
-                        f'{self.arov}/base_link',
-                        'map',
-                        rclpy.time.Time())
                     
                     observed_orientation = Rotation.from_quat([map_to_tag.transform.rotation.x, map_to_tag.transform.rotation.y,
                                                                 map_to_tag.transform.rotation.z, map_to_tag.transform.rotation.w]) * \
-                                            Rotation.from_quat([base_link_to_tag.transform.rotation.x, base_link_to_tag.transform.rotation.y,
+                                           Rotation.from_quat([base_link_to_tag.transform.rotation.x, base_link_to_tag.transform.rotation.y,
                                                                 base_link_to_tag.transform.rotation.z, base_link_to_tag.transform.rotation.w]).inv()
                     
-                    tag_in_map = observed_orientation.apply(np.array([base_link_to_tag.transform.translation.x, base_link_to_tag.transform.translation.y, 
-                                                                     base_link_to_tag.transform.translation.z]), True)
+                    tag_in_map = observed_orientation.apply(np.array([base_link_to_tag.transform.translation.x,
+                                                                      base_link_to_tag.transform.translation.y, 
+                                                                      base_link_to_tag.transform.translation.z]), False)
 
                     observation = np.array([map_to_tag.transform.translation.x - tag_in_map[0],
                                             map_to_tag.transform.translation.y - tag_in_map[1],
                                             map_to_tag.transform.translation.z - tag_in_map[2],
-                                            *observed_orientation.inv().as_euler('xyz')])
-
-                    # observed_orientation = (Rotation.from_quat([map_to_tag.transform.rotation.x, map_to_tag.transform.rotation.y,
-                    #                                             map_to_tag.transform.rotation.z, map_to_tag.transform.rotation.w]) * \
-                    #                         Rotation.from_quat([base_link_to_tag.transform.rotation.x, base_link_to_tag.transform.rotation.y,
-                    #                                             base_link_to_tag.transform.rotation.z, base_link_to_tag.transform.rotation.w]).inv())\
-                    #                                             .as_euler('xyz')
+                                            *observed_orientation.as_euler('xyz')])
                     
-                    # tag_in_map = Rotation.from_quat([base_link_to_map.transform.rotation.x, base_link_to_map.transform.rotation.y,
-                    #                                  base_link_to_map.transform.rotation.z, base_link_to_map.transform.rotation.w])\
-                    #                                 .apply(np.array([base_link_to_tag.transform.translation.x, base_link_to_tag.transform.translation.y, 
-                    #                                                  base_link_to_tag.transform.translation.z]), True)
-
-                    # observation = np.array([map_to_tag.transform.translation.x - tag_in_map[0],
-                    #                         map_to_tag.transform.translation.y - tag_in_map[1],
-                    #                         map_to_tag.transform.translation.z - tag_in_map[2],
-                    #                         *observed_orientation])
+                    self.get_logger().info(f'{tag_in_map}')
                     
                     h_jacobian = np.array([[1, 0, 0, 0, 0, 0],
                                            [0, 1, 0, 0, 0, 0],
