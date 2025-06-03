@@ -22,12 +22,12 @@ class AROV_EKF_Global(Node):
             ('~ros_bag', True),                                     # Toggle for using bagged data and switching to sending test transforms
             ('~vehicle_name', 'arov'),                              # Used for the topics and services that this node subscribes to and provides
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),       # 
-            ('~predict_noise', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),     # Diagonals of the covariance matrix for prediction noise (if there should
+            ('~predict_noise', [5.0, 5.0, 5.0, 2.0, 2.0, 2.0]),     # Diagonals of the covariance matrix for prediction noise (if there should
                                                                     # be non-zero covariance, change where this parameter is used from diag to array)
-            ('~depth_noise', [1.0]),                                # Sensor noise values.
-            ('~compass_noise', [1.0]),
-            ('~roll_pitch_noise', [1.0, 1.0]),
-            ('~apriltag_noise', [0.1, 0.1, 0.1, 0.01, 0.01, 0.01])
+            ('~depth_noise', [0.5]),                                # Sensor noise values.
+            ('~compass_noise', [0.1]),
+            ('~roll_pitch_noise', [0.1, 0.1]),
+            ('~apriltag_noise', [0.5, 0.5, 0.5, 0.1, 0.1, 0.1])
         ])
 
         self.ros_bag = self.get_parameter('~ros_bag').value
@@ -60,13 +60,16 @@ class AROV_EKF_Global(Node):
         self.time_km1 = None
         self.state = None                                                                       # State estimate: x, y, z, roll, pitch, yaw
         self.cov = np.diag(self.get_parameter('~initial_cov').value)                            # Covariance estimate
-        self.predict_noise = np.diag(self.get_parameter('~predict_noise').value)
-        self. correct_noise = {'depth': np.diag(self.get_parameter('~depth_noise').value),
-                               'compass': np.diag(self.get_parameter('~compass_noise').value),
-                               'pitch_roll': np.diag(self.get_parameter('~roll_pitch_noise').value),
-                               'apriltag': np.diag(self.get_parameter('~apriltag_noise').value)}
+        self.predict_noise = np.power(np.diag(self.get_parameter('~predict_noise').value), 2)
+        self.correct_noise = {'depth': np.diag(self.get_parameter('~depth_noise').value),
+                              'compass': np.diag(self.get_parameter('~compass_noise').value),
+                              'pitch_roll': np.diag(self.get_parameter('~roll_pitch_noise').value),
+                              'apriltag': np.diag(self.get_parameter('~apriltag_noise').value)}
+        
+        for noise in self.correct_noise:
+            self.correct_noise[noise] = np.power(self.correct_noise[noise], 2)
 
-        self.predict_timer = self.create_timer(0.04, self.predict)
+        self.predict_timer = self.create_timer(0.01, self.predict)
         self.pub_timer = self.create_timer(0.02, self.publish_transform)
 
     def publish_transform(self):
@@ -112,13 +115,39 @@ class AROV_EKF_Global(Node):
 
     def arov_pose_callback(self, msg: Odometry):
         self.odom = msg
+
+        if self.state is None:
+            return
+
+        try:
+            odom_to_base_link = self.tf_buffer.lookup_transform(
+                f'{self.arov}/odom',
+                f'{self.arov}/base_link',
+                rclpy.time.Time())
+            
+            orientation = Rotation.from_euler('xyz', self.state[3:]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+                                                                                            odom_to_base_link.transform.rotation.y,
+                                                                                            odom_to_base_link.transform.rotation.z,
+                                                                                            odom_to_base_link.transform.rotation.w]).inv()
+
+            self.correct('depth', [False, False, True, False, False, False], np.array([*orientation.apply([0, 0, msg.pose.pose.position.z]), 0, 0, 0]),
+                         np.array([0, 0, 1, 0, 0, 0]))
+            
+            self.correct('compass', [False, False, False, False, False, True],
+                         np.array([0, 0, 0, *(Rotation.from_euler('xyz', [0, 0, msg.pose.pose.orientation.z]) * orientation.inv()).as_euler('xyz')]),
+                         np.array([0, 0, 0, 0, 0, 1]))
+            
+            self.correct('pitch_roll', [False, False, False, True, True, False],
+                         np.array([0, 0, 0,
+                                   *(Rotation.from_euler('xyz', [msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, 0])
+                                     * orientation.inv()).as_euler('xyz')]),
+                         np.array([[0, 0, 0, 0, 1, 0],
+                                   [0, 0, 0, 0, 0, 1]]))
         
-        # self.correct('depth', [False, False, True, False, False, False], np.array([0, 0, msg.pose.pose.position.z, 0, 0, 0]), np.array([0, 0, 1, 0, 0, 0]))
-        # self.correct('compass', [False, False, False, False, False, True], np.array([0, 0, 0, 0, 0, msg.pose.pose.orientation.z]),
-        #              np.array([0, 0, 0, 0, 0, 1]))
-        # self.correct('pitch_roll', [False, False, False, True, True, False], np.array([0, 0, 0, msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, 0]),
-        #              np.array([[0, 0, 0, 0, 1, 0],
-        #                        [0, 0, 0, 0, 0, 1]]))
+        except TransformException as ex:
+            self.get_logger().info(
+                f'Could not transform odom to base_link: {ex}')
+            return
 
     def arov_apriltag_detect_callback(self, msg: AprilTagDetectionArray):
         '''
@@ -218,7 +247,7 @@ class AROV_EKF_Global(Node):
 
             self.state += vel * dt
 
-            F = np.diag([1, 1, 1, 1, 1, 1])                                         # TODO if a rotation is added in vel, account for it here
+            F = np.diag([1, 1, 1, 1, 1, 1])
             self.cov = F @ self.cov @ F.transpose() + (dt * self.predict_noise)
         
         except TransformException as ex:
