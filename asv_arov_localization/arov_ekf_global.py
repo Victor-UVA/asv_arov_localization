@@ -19,6 +19,7 @@ class AROV_EKF_Global(Node):
     def __init__(self):
         super().__init__('arov_ekf_global')
         self.declare_parameters(namespace='',parameters=[
+            ('~ros_bag', True),                                     # Toggle for using bagged data and switching to sending test transforms
             ('~vehicle_name', 'arov'),                              # Used for the topics and services that this node subscribes to and provides
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),       # 
             ('~predict_noise', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),     # Diagonals of the covariance matrix for prediction noise (if there should
@@ -29,6 +30,7 @@ class AROV_EKF_Global(Node):
             ('~apriltag_noise', [0.1, 0.1, 0.1, 0.01, 0.01, 0.01])
         ])
 
+        self.ros_bag = self.get_parameter('~ros_bag').value
         self.arov = self.get_parameter('~vehicle_name').value
 
         self.arov_pose_sub = self.create_subscription(
@@ -97,7 +99,11 @@ class AROV_EKF_Global(Node):
             self.transform.transform.rotation.z = orientation[2]
             self.transform.transform.rotation.w = orientation[3]
 
-            self.tf_broadcaster.sendTransform(self.transform)
+            
+            if not self.ros_bag:
+                self.tf_broadcaster.sendTransform(self.transform)
+            else:
+                self.bag_testing(odom_to_base_link)
 
         except TransformException as ex:
             self.get_logger().info(
@@ -148,8 +154,6 @@ class AROV_EKF_Global(Node):
                                             map_to_tag.transform.translation.z - tag_in_map[2],
                                             *observed_orientation.as_euler('xyz')])
                     
-                    self.get_logger().info(f'{tag_in_map}')
-                    
                     h_jacobian = np.array([[1, 0, 0, 0, 0, 0],
                                            [0, 1, 0, 0, 0, 0],
                                            [0, 0, 1, 0, 0, 0],
@@ -158,6 +162,14 @@ class AROV_EKF_Global(Node):
                                            [0, 0, 0, 0, 0, 1]])
 
                     self.correct('apriltag', [True, True, True, True, True, True], observation, h_jacobian)
+
+                    if self.ros_bag:
+                        base_link_to_tag.header.frame_id = f'{self.arov}_bag/base_link'
+                        base_link_to_tag.child_frame_id = f'{tag_frame}_bag'
+
+                        base_link_to_tag.header.stamp = self.get_clock().now().to_msg()
+
+                        self.tf_broadcaster.sendTransform(base_link_to_tag)
 
                 except TransformException as ex:
                     self.get_logger().info(
@@ -183,18 +195,36 @@ class AROV_EKF_Global(Node):
                 self.time_km1 = self.get_clock().now().nanoseconds
             return
         
-        # Vel is ENU in the odom frame TODO May need to rotate this into the map frame if orientation is not close enough between map and odom
-        vel = np.array([self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z,
-                        self.odom.twist.twist.angular.x, self.odom.twist.twist.angular.y, self.odom.twist.twist.angular.z])
+
+        try:
+            odom_to_base_link = self.tf_buffer.lookup_transform(
+                f'{self.arov}/odom',
+                f'{self.arov}/base_link',
+                rclpy.time.Time())
+            
+            orientation = Rotation.from_euler('xyz', self.state[3:]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+                                                                                            odom_to_base_link.transform.rotation.y,
+                                                                                            odom_to_base_link.transform.rotation.z,
+                                                                                            odom_to_base_link.transform.rotation.w]).inv()
+
+            linear_vel = np.array([self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z])
+            angular_vel = np.array([self.odom.twist.twist.angular.x, self.odom.twist.twist.angular.y, self.odom.twist.twist.angular.z])
+
+            vel = np.array([*orientation.apply(linear_vel), *orientation.apply(angular_vel)])
+
+            time_k = self.get_clock().now().nanoseconds
+            dt =  (time_k - self.time_km1) / 10.0**9                                # Time since last prediction
+            self.time_km1 = time_k
+
+            self.state += vel * dt
+
+            F = np.diag([1, 1, 1, 1, 1, 1])                                         # TODO if a rotation is added in vel, account for it here
+            self.cov = F @ self.cov @ F.transpose() + (dt * self.predict_noise)
         
-        time_k = self.get_clock().now().nanoseconds
-        dt =  (time_k - self.time_km1) / 10.0**9                                # Time since last prediction
-        self.time_km1 = time_k
-
-        self.state += vel * dt
-
-        F = np.diag([1, 1, 1, 1, 1, 1])                                         # TODO if a rotation is added in vel, account for it here
-        self.cov = F @ self.cov @ F.transpose() + (dt * self.predict_noise)
+        except TransformException as ex:
+            self.get_logger().info(
+                f'Could not transform odom to base_link: {ex}')
+            return
 
     def correct(self, observation_name: str, state_mask: list[bool], observation: np.ndarray, h_jacobian: np.ndarray):
         '''
@@ -220,6 +250,18 @@ class AROV_EKF_Global(Node):
 
         # Normalize rotations between -pi to pi
         self.state[3:] = np.arctan2(np.sin(self.state[3:]), np.cos(self.state[3:]))
+
+    def bag_testing(self, odom_to_base_link: TransformStamped):
+        bag_odom = self.transform
+        bag_odom.child_frame_id = f'{self.arov}_bag/odom'
+
+        odom_to_base_link.header.frame_id = f'{self.arov}_bag/odom'
+        odom_to_base_link.child_frame_id = f'{self.arov}_bag/base_link'
+
+        odom_to_base_link.header.stamp = self.get_clock().now().to_msg()
+        
+        self.tf_broadcaster.sendTransform(bag_odom)
+        self.tf_broadcaster.sendTransform(odom_to_base_link)
 
 
 def main():    
