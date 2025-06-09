@@ -20,7 +20,7 @@ class AROV_EKF_Global(Node):
         super().__init__('arov_ekf_global')
         self.declare_parameters(namespace='',parameters=[
             ('~ros_bag', True),                                     # Toggle for using bagged data and switching to sending test transforms
-            ('~vehicle_name', 'arov'),                              # Used for the topics and services that this node subscribes to and provides
+            # ('~vehicle_name', 'arov'),                              # Used for the topics and services that this node subscribes to and provides
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),       # 
             ('~predict_noise', [5.0, 5.0, 5.0, 2.0, 2.0, 2.0]),     # Diagonals of the covariance matrix for prediction noise (if there should
                                                                     # be non-zero covariance, change where this parameter is used from diag to array)
@@ -31,18 +31,18 @@ class AROV_EKF_Global(Node):
         ])
 
         self.ros_bag = self.get_parameter('~ros_bag').value
-        self.arov = self.get_parameter('~vehicle_name').value
+        self.arov = self.get_namespace().strip('/')
 
         self.arov_pose_sub = self.create_subscription(
             Odometry,
-            f'{self.arov}/odom',
+            f'{self.get_namespace()}/odom',
             self.arov_pose_callback,
             10)
         self.arov_pose_sub  # prevent unused variable warning
 
         self.arov_apriltag_detect_sub = self.create_subscription(
             AprilTagDetectionArray,
-            '/detections',
+            f'{self.get_namespace()}/detections',
             self.arov_apriltag_detect_callback,
             10)
         self.arov_apriltag_detect_sub  # prevent unused variable warning
