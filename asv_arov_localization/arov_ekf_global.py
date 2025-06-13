@@ -125,22 +125,27 @@ class AROV_EKF_Global(Node):
                 f'{self.arov}/base_link',
                 rclpy.time.Time())
             
+            global_orientation = Rotation.from_euler('xyz', self.state[3:]) # * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+                                                                                            # odom_to_base_link.transform.rotation.y,
+                                                                                            # odom_to_base_link.transform.rotation.z,
+                                                                                            # odom_to_base_link.transform.rotation.w]).inv()
+
             orientation = Rotation.from_euler('xyz', self.state[3:]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-                                                                                            odom_to_base_link.transform.rotation.y,
-                                                                                            odom_to_base_link.transform.rotation.z,
-                                                                                            odom_to_base_link.transform.rotation.w]).inv()
+                                                                                           odom_to_base_link.transform.rotation.y,
+                                                                                           odom_to_base_link.transform.rotation.z,
+                                                                                           odom_to_base_link.transform.rotation.w]).inv()
 
             self.correct('depth', [False, False, True, False, False, False], np.array([*orientation.apply([0, 0, msg.pose.pose.position.z]), 0, 0, 0]),
                          np.array([0, 0, 1, 0, 0, 0]))
             
             self.correct('compass', [False, False, False, False, False, True],
-                         np.array([0, 0, 0, *(Rotation.from_euler('xyz', [0, 0, msg.pose.pose.orientation.z]) * orientation.inv()).as_euler('xyz')]),
+                         np.array([0, 0, 0, *(Rotation.from_euler('xyz', [0, 0, msg.pose.pose.orientation.z]) * global_orientation.inv()).as_euler('xyz')]),
                          np.array([0, 0, 0, 0, 0, 1]))
             
             self.correct('pitch_roll', [False, False, False, True, True, False],
                          np.array([0, 0, 0,
                                    *(Rotation.from_euler('xyz', [msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, 0])
-                                     * orientation.inv()).as_euler('xyz')]),
+                                     * global_orientation.inv()).as_euler('xyz')]),
                          np.array([[0, 0, 0, 0, 1, 0],
                                    [0, 0, 0, 0, 0, 1]]))
         
