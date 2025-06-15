@@ -63,7 +63,7 @@ class AROV_EKF_Global(Node):
         self.predict_noise = np.power(np.diag(self.get_parameter('~predict_noise').value), 2)
         self.correct_noise = {'depth': np.diag(self.get_parameter('~depth_noise').value),
                               'compass': np.diag(self.get_parameter('~compass_noise').value),
-                              'pitch_roll': np.diag(self.get_parameter('~roll_pitch_noise').value),
+                              'roll_pitch': np.diag(self.get_parameter('~roll_pitch_noise').value),
                               'apriltag': np.diag(self.get_parameter('~apriltag_noise').value)}
         
         for noise in self.correct_noise:
@@ -125,27 +125,33 @@ class AROV_EKF_Global(Node):
                 f'{self.arov}/base_link',
                 rclpy.time.Time())
             
-            global_orientation = Rotation.from_euler('xyz', self.state[3:]) # * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-                                                                                            # odom_to_base_link.transform.rotation.y,
-                                                                                            # odom_to_base_link.transform.rotation.z,
-                                                                                            # odom_to_base_link.transform.rotation.w]).inv()
+            # TODO Check all these rotation orders
+            msg_orientation = Rotation.from_quat([msg.pose.pose.orientation.x,
+                                                  msg.pose.pose.orientation.y,
+                                                  msg.pose.pose.orientation.z,
+                                                  msg.pose.pose.orientation.w])
 
-            orientation = Rotation.from_euler('xyz', self.state[3:]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-                                                                                           odom_to_base_link.transform.rotation.y,
-                                                                                           odom_to_base_link.transform.rotation.z,
-                                                                                           odom_to_base_link.transform.rotation.w]).inv()
+            odom_to_global_rot = Rotation.from_euler('xyz', self.state[3:]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+                                                                                                  odom_to_base_link.transform.rotation.y,
+                                                                                                  odom_to_base_link.transform.rotation.z,
+                                                                                                  odom_to_base_link.transform.rotation.w])
 
-            self.correct('depth', [False, False, True, False, False, False], np.array([*orientation.apply([0, 0, msg.pose.pose.position.z]), 0, 0, 0]),
+            odom_position = np.array([msg.pose.pose.position.x,
+                                      msg.pose.pose.position.y,
+                                      msg.pose.pose.position.z])
+            
+            global_depth = odom_to_global_rot.apply(odom_position)[2]
+            global_rot = (msg_orientation * odom_to_global_rot.inv()).as_euler('xyz')
+
+            self.correct('depth', [False, False, True, False, False, False], np.array([0, 0, global_depth, 0, 0, 0]),
                          np.array([0, 0, 1, 0, 0, 0]))
             
             self.correct('compass', [False, False, False, False, False, True],
-                         np.array([0, 0, 0, *(Rotation.from_euler('xyz', [0, 0, msg.pose.pose.orientation.z]) * global_orientation.inv()).as_euler('xyz')]),
+                         np.array([0, 0, 0, 0, 0, global_rot[2]]),
                          np.array([0, 0, 0, 0, 0, 1]))
             
-            self.correct('pitch_roll', [False, False, False, True, True, False],
-                         np.array([0, 0, 0,
-                                   *(Rotation.from_euler('xyz', [msg.pose.pose.orientation.x, msg.pose.pose.orientation.y, 0])
-                                     * global_orientation.inv()).as_euler('xyz')]),
+            self.correct('roll_pitch', [False, False, False, True, True, False],
+                         np.array([0, 0, 0, global_rot[0], global_rot[1], 0]),
                          np.array([[0, 0, 0, 0, 1, 0],
                                    [0, 0, 0, 0, 0, 1]]))
         
