@@ -280,9 +280,9 @@ class AROV_EKF_Global(Node):
         '''
         if self.state is None: return
 
-        err = np.atleast_2d(np.extract(state_mask, observation - self.state)).transpose() # 2X1
-        err_cov = (h_jacobian @ self.cov @ h_jacobian.transpose()) + self.correct_noise[observation_name] # 2X2
-        K_gain = self.cov @ np.atleast_2d(h_jacobian).transpose() @ np.linalg.inv(err_cov) # 6X2
+        err = np.atleast_2d(np.extract(state_mask, observation - self.state)).transpose()
+        err_cov = (h_jacobian @ self.cov @ h_jacobian.transpose()) + self.correct_noise[observation_name]
+        K_gain = self.cov @ np.atleast_2d(h_jacobian).transpose() @ np.linalg.inv(err_cov)
 
         state_correction = np.zeros_like(self.state)
         np.copyto(state_correction, (K_gain @ err).transpose(), where=state_mask)
