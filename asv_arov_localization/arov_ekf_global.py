@@ -285,7 +285,7 @@ class AROV_EKF_Global(Node):
         K_gain = self.cov @ np.atleast_2d(h_jacobian).transpose() @ np.linalg.inv(err_cov)
 
         state_correction = np.zeros_like(self.state)
-        np.copyto(state_correction, (K_gain @ err).transpose(), where=state_mask)
+        np.copyto(state_correction, (K_gain @ err).transpose()) # , where=state_mask
 
         self.state += state_correction
         self.cov = (np.eye(np.shape(self.cov)[0]) - K_gain @ np.atleast_2d(h_jacobian)) @ self.cov
