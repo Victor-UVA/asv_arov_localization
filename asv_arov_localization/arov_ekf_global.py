@@ -19,15 +19,14 @@ class AROV_EKF_Global(Node):
     def __init__(self):
         super().__init__('arov_ekf_global')
         self.declare_parameters(namespace='',parameters=[
-            ('~ros_bag', True),                                     # Toggle for using bagged data and switching to sending test transforms
-            # ('~vehicle_name', 'arov'),                              # Used for the topics and services that this node subscribes to and provides
-            ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),       # 
-            ('~predict_noise', [5.0, 5.0, 5.0, 2.0, 2.0, 2.0]),     # Diagonals of the covariance matrix for prediction noise (if there should
-                                                                    # be non-zero covariance, change where this parameter is used from diag to array)
-            ('~depth_noise', [0.5]),                                # Sensor noise values.
-            ('~compass_noise', [0.1]),
-            ('~roll_pitch_noise', [0.1, 0.1]),
-            ('~apriltag_noise', [0.5, 0.5, 0.5, 0.1, 0.1, 0.1])
+            ('~ros_bag', True),                                         # Toggle for using bagged data and switching to sending test transforms
+            ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+            ('~predict_noise', [0.75, 0.75, 0.75, 0.75, 0.75, 0.75]),   # Diagonals of the covariance matrix for prediction noise (if there should
+                                                                        # be non-zero covariance, change where this parameter is used from diag to array)
+            ('~depth_noise', [0.5]),                                    # Sensor noise values.
+            ('~compass_noise', [0.25]),
+            ('~roll_pitch_noise', [0.25, 0.25]),
+            ('~apriltag_noise', [0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
         ])
 
         self.ros_bag = self.get_parameter('~ros_bag').value
@@ -131,7 +130,7 @@ class AROV_EKF_Global(Node):
                                                   msg.pose.pose.orientation.z,
                                                   msg.pose.pose.orientation.w])
 
-            odom_to_global_rot = Rotation.from_euler('xyz', self.state[3:]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+            odom_to_global_rot = Rotation.from_euler('xyz', self.state[3:]).inv() * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
                                                                                                   odom_to_base_link.transform.rotation.y,
                                                                                                   odom_to_base_link.transform.rotation.z,
                                                                                                   odom_to_base_link.transform.rotation.w])
@@ -141,7 +140,7 @@ class AROV_EKF_Global(Node):
                                       msg.pose.pose.position.z])
             
             global_depth = odom_to_global_rot.apply(odom_position)[2]
-            global_rot = (msg_orientation * odom_to_global_rot.inv()).as_euler('xyz')
+            global_rot = (odom_to_global_rot * msg_orientation).as_euler('xyz')
 
             self.correct('depth', [False, False, True, False, False, False], np.array([0, 0, global_depth, 0, 0, 0]),
                          np.array([0, 0, 1, 0, 0, 0]))
@@ -152,8 +151,8 @@ class AROV_EKF_Global(Node):
             
             self.correct('roll_pitch', [False, False, False, True, True, False],
                          np.array([0, 0, 0, global_rot[0], global_rot[1], 0]),
-                         np.array([[0, 0, 0, 0, 1, 0],
-                                   [0, 0, 0, 0, 0, 1]]))
+                         np.array([[0, 0, 0, 1, 0, 0],
+                                   [0, 0, 0, 0, 1, 0]]))
         
         except TransformException as ex:
             self.get_logger().info(
@@ -258,6 +257,9 @@ class AROV_EKF_Global(Node):
 
             self.state += vel * dt
 
+            # Normalize rotations between -pi to pi
+            self.state[3:] = np.arctan2(np.sin(self.state[3:]), np.cos(self.state[3:]))
+
             F = np.diag([1, 1, 1, 1, 1, 1])
             self.cov = F @ self.cov @ F.transpose() + (dt * self.predict_noise)
         
@@ -278,12 +280,12 @@ class AROV_EKF_Global(Node):
         '''
         if self.state is None: return
 
-        err = np.atleast_2d(np.extract(state_mask, observation - self.state)).transpose()
-        err_cov = (h_jacobian @ self.cov @ h_jacobian.transpose()) + self.correct_noise[observation_name]
-        K_gain = (self.cov @ np.atleast_2d(h_jacobian).transpose()) @ np.linalg.inv(err_cov)
+        err = np.atleast_2d(np.extract(state_mask, observation - self.state)).transpose() # 2X1
+        err_cov = (h_jacobian @ self.cov @ h_jacobian.transpose()) + self.correct_noise[observation_name] # 2X2
+        K_gain = self.cov @ np.atleast_2d(h_jacobian).transpose() @ np.linalg.inv(err_cov) # 6X2
 
         state_correction = np.zeros_like(self.state)
-        np.place(state_correction, state_mask, K_gain @ err)
+        np.copyto(state_correction, (K_gain @ err).transpose(), where=state_mask)
 
         self.state += state_correction
         self.cov = (np.eye(np.shape(self.cov)[0]) - K_gain @ np.atleast_2d(h_jacobian)) @ self.cov
