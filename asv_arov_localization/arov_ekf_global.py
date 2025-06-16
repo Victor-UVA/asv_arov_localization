@@ -21,12 +21,12 @@ class AROV_EKF_Global(Node):
         self.declare_parameters(namespace='',parameters=[
             ('~ros_bag', True),                                         # Toggle for using bagged data and switching to sending test transforms
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-            ('~predict_noise', [0.75, 0.75, 0.75, 0.75, 0.75, 0.75]),   # Diagonals of the covariance matrix for prediction noise (if there should
+            ('~predict_noise', [0.5, 0.5, 0.5, 0.75, 0.75, 0.75]),   # Diagonals of the covariance matrix for prediction noise (if there should
                                                                         # be non-zero covariance, change where this parameter is used from diag to array)
-            ('~depth_noise', [0.5]),                                    # Sensor noise values.
-            ('~compass_noise', [0.75]),
-            ('~roll_pitch_noise', [0.25, 0.25]),
-            ('~apriltag_noise', [0.25, 0.25, 0.25, 0.125, 0.125, 0.125])
+            ('~depth_noise', [0.75]),                                    # Sensor noise values.
+            ('~compass_noise', [0.5]),
+            ('~roll_pitch_noise', [0.125, 0.125]),
+            ('~apriltag_noise', [0.75, 0.75, 0.75, 0.25, 0.25, 0.25])
         ])
 
         self.ros_bag = self.get_parameter('~ros_bag').value
@@ -101,7 +101,6 @@ class AROV_EKF_Global(Node):
             self.transform.transform.rotation.z = orientation[2]
             self.transform.transform.rotation.w = orientation[3]
 
-            
             if not self.ros_bag:
                 self.tf_broadcaster.sendTransform(self.transform)
             else:
@@ -240,21 +239,20 @@ class AROV_EKF_Global(Node):
                 f'{self.arov}/base_link',
                 rclpy.time.Time())
             
-            orientation = Rotation.from_euler('xyz', self.state[3:]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-                                                                                            odom_to_base_link.transform.rotation.y,
-                                                                                            odom_to_base_link.transform.rotation.z,
-                                                                                            odom_to_base_link.transform.rotation.w]).inv()
-
-            linear_vel = np.array([self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z])
-            angular_vel = np.array([self.odom.twist.twist.angular.x, self.odom.twist.twist.angular.y, self.odom.twist.twist.angular.z])
-
-            vel = np.array([*orientation.apply(linear_vel), *orientation.apply(angular_vel)])
-
             time_k = self.get_clock().now().nanoseconds
             dt =  (time_k - self.time_km1) / 10.0**9                                # Time since last prediction
             self.time_km1 = time_k
 
-            self.state += vel * dt
+            orientation = Rotation.from_euler('xyz', self.state[3:]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+                                                                                           odom_to_base_link.transform.rotation.y,
+                                                                                           odom_to_base_link.transform.rotation.z,
+                                                                                           odom_to_base_link.transform.rotation.w]).inv()
+
+            linear_vel = np.array([self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z])
+            angular_vel = np.array([self.odom.twist.twist.angular.x, self.odom.twist.twist.angular.y, self.odom.twist.twist.angular.z])
+
+            self.state[:3] += orientation.apply(linear_vel) * dt
+            self.state[3:] += Rotation.from_euler('xyz', angular_vel * dt).as_euler('xyz')
 
             # Normalize rotations between -pi to pi
             self.state[3:] = np.arctan2(np.sin(self.state[3:]), np.cos(self.state[3:]))
