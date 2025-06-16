@@ -26,7 +26,7 @@ class AROV_EKF_Global(Node):
             ('~depth_noise', [0.5]),                                    # Sensor noise values.
             ('~compass_noise', [0.25]),
             ('~roll_pitch_noise', [0.25, 0.25]),
-            ('~apriltag_noise', [0.5, 0.5, 0.5, 0.5, 0.5, 0.5])
+            ('~apriltag_noise', [0.25, 0.25, 0.25, 0.125, 0.125, 0.125])
         ])
 
         self.ros_bag = self.get_parameter('~ros_bag').value
@@ -124,16 +124,15 @@ class AROV_EKF_Global(Node):
                 f'{self.arov}/base_link',
                 rclpy.time.Time())
             
-            # TODO Check all these rotation orders
             msg_orientation = Rotation.from_quat([msg.pose.pose.orientation.x,
                                                   msg.pose.pose.orientation.y,
                                                   msg.pose.pose.orientation.z,
                                                   msg.pose.pose.orientation.w])
 
             odom_to_global_rot = Rotation.from_euler('xyz', self.state[3:]).inv() * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-                                                                                                  odom_to_base_link.transform.rotation.y,
-                                                                                                  odom_to_base_link.transform.rotation.z,
-                                                                                                  odom_to_base_link.transform.rotation.w])
+                                                                                                        odom_to_base_link.transform.rotation.y,
+                                                                                                        odom_to_base_link.transform.rotation.z,
+                                                                                                        odom_to_base_link.transform.rotation.w])
 
             odom_position = np.array([msg.pose.pose.position.x,
                                       msg.pose.pose.position.y,
