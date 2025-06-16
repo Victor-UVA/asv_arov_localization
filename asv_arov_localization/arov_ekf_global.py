@@ -24,7 +24,7 @@ class AROV_EKF_Global(Node):
             ('~predict_noise', [0.75, 0.75, 0.75, 0.75, 0.75, 0.75]),   # Diagonals of the covariance matrix for prediction noise (if there should
                                                                         # be non-zero covariance, change where this parameter is used from diag to array)
             ('~depth_noise', [0.5]),                                    # Sensor noise values.
-            ('~compass_noise', [0.25]),
+            ('~compass_noise', [0.75]),
             ('~roll_pitch_noise', [0.25, 0.25]),
             ('~apriltag_noise', [0.25, 0.25, 0.25, 0.125, 0.125, 0.125])
         ])
