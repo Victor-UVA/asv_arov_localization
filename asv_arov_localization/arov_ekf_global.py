@@ -243,16 +243,16 @@ class AROV_EKF_Global(Node):
             dt =  (time_k - self.time_km1) / 10.0**9                                # Time since last prediction
             self.time_km1 = time_k
 
-            orientation = Rotation.from_euler('xyz', self.state[3:]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-                                                                                           odom_to_base_link.transform.rotation.y,
-                                                                                           odom_to_base_link.transform.rotation.z,
-                                                                                           odom_to_base_link.transform.rotation.w]).inv()
+            orientation = Rotation.from_euler('xyz', self.state[3:]).inv() * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+                                                                                                 odom_to_base_link.transform.rotation.y,
+                                                                                                 odom_to_base_link.transform.rotation.z,
+                                                                                                 odom_to_base_link.transform.rotation.w])
 
             linear_vel = np.array([self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z])
             angular_vel = np.array([self.odom.twist.twist.angular.x, self.odom.twist.twist.angular.y, self.odom.twist.twist.angular.z])
 
             self.state[:3] += orientation.apply(linear_vel) * dt
-            self.state[3:] += Rotation.from_euler('xyz', angular_vel * dt).as_euler('xyz')
+            self.state[3:] = (Rotation.from_euler('xyz', angular_vel * dt) * Rotation.from_euler('xyz', self.state[3:])).as_euler('xyz')
 
             # Normalize rotations between -pi to pi
             self.state[3:] = np.arctan2(np.sin(self.state[3:]), np.cos(self.state[3:]))
