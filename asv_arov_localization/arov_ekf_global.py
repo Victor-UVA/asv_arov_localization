@@ -71,17 +71,24 @@ class AROV_EKF_Global(Node):
         self.predict_timer = self.create_timer(0.01, self.predict)
         self.pub_timer = self.create_timer(0.02, self.publish_transform)
 
-    def publish_transform(self):
-        if self.state is None: return
-        
-        self.transform.header.stamp = self.get_clock().now().to_msg()
+    def publish_transform(self) :
+        if self.state is None : return
 
-        try:
+        odom_to_base_link = None
+
+        try :
             odom_to_base_link = self.tf_buffer.lookup_transform(
                 f'{self.arov}/odom',
                 f'{self.arov}/base_link',
                 rclpy.time.Time())
             
+        except TransformException as ex :
+            self.get_logger().info(
+                f'Could not transform odom to base_link: {ex}')
+            return
+            
+
+        if odom_to_base_link is not None :
             orientation = Rotation.from_euler('xyz', self.state[3:]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
                                                                                            odom_to_base_link.transform.rotation.y,
                                                                                            odom_to_base_link.transform.rotation.z,
@@ -93,6 +100,7 @@ class AROV_EKF_Global(Node):
 
             orientation = orientation.as_quat()
 
+            self.transform.header.stamp = self.get_clock().now().to_msg()
             self.transform.transform.translation.x = translation[0]
             self.transform.transform.translation.y = translation[1]
             self.transform.transform.translation.z = translation[2]
@@ -101,15 +109,10 @@ class AROV_EKF_Global(Node):
             self.transform.transform.rotation.z = orientation[2]
             self.transform.transform.rotation.w = orientation[3]
 
-            if not self.ros_bag:
+            if not self.ros_bag :
                 self.tf_broadcaster.sendTransform(self.transform)
-            else:
+            else :
                 self.bag_testing(odom_to_base_link)
-
-        except TransformException as ex:
-            self.get_logger().info(
-                f'Could not transform odom to base_link: {ex}')
-            return
 
     def arov_pose_callback(self, msg: Odometry):
         self.odom = msg
@@ -117,12 +120,20 @@ class AROV_EKF_Global(Node):
         if self.state is None:
             return
 
-        try:
+        odom_to_base_link = None
+
+        try :
             odom_to_base_link = self.tf_buffer.lookup_transform(
                 f'{self.arov}/odom',
                 f'{self.arov}/base_link',
                 rclpy.time.Time())
             
+        except TransformException as ex :
+            self.get_logger().info(
+                f'Could not transform odom to base_link: {ex}')
+            return
+            
+        if odom_to_base_link is not None :
             msg_orientation = Rotation.from_quat([msg.pose.pose.orientation.x,
                                                   msg.pose.pose.orientation.y,
                                                   msg.pose.pose.orientation.z,
@@ -151,40 +162,50 @@ class AROV_EKF_Global(Node):
                          np.array([0, 0, 0, global_rot[0], global_rot[1], 0]),
                          np.array([[0, 0, 0, 1, 0, 0],
                                    [0, 0, 0, 0, 1, 0]]))
-        
-        except TransformException as ex:
-            self.get_logger().info(
-                f'Could not transform odom to base_link: {ex}')
-            return
 
     def arov_apriltag_detect_callback(self, msg: AprilTagDetectionArray):
         '''
         Runs full state correction using AprilTag detections whenever one or more AprilTags are observed.  Assumes a map of true AprilTag transforms
         is provided (can be static or dynamic).
         '''
-        if msg.detections:
-            for tag in msg.detections:
+        if msg.detections :
+            for tag in msg.detections :
                 tag_frame = f'{tag.family}:{tag.id}'
                 
-                try:
+                base_link_to_tag = None
+                map_to_tag = None
+
+                try :
                     base_link_to_tag = self.tf_buffer.lookup_transform(
                         f'{self.arov}/base_link',
                         tag_frame,
                         rclpy.time.Time())
+                    
+                except TransformException as ex :
+                    self.get_logger().info(
+                        f'Could not transform {f'{self.arov}/base_link'} to {tag_frame}: {ex}')
+                    continue
 
+                try :
                     map_to_tag = self.tf_buffer.lookup_transform(
                         'map',
                         f'{tag_frame}_true',
                         rclpy.time.Time())
                     
+                except TransformException as ex :
+                    self.get_logger().info(
+                        f'Could not transform map to {tag_frame}_true: {ex}')
+                    continue
+                    
+                if base_link_to_tag is not None and map_to_tag is not None :
                     observed_orientation = Rotation.from_quat([map_to_tag.transform.rotation.x, map_to_tag.transform.rotation.y,
                                                                 map_to_tag.transform.rotation.z, map_to_tag.transform.rotation.w]) * \
-                                           Rotation.from_quat([base_link_to_tag.transform.rotation.x, base_link_to_tag.transform.rotation.y,
+                                            Rotation.from_quat([base_link_to_tag.transform.rotation.x, base_link_to_tag.transform.rotation.y,
                                                                 base_link_to_tag.transform.rotation.z, base_link_to_tag.transform.rotation.w]).inv()
                     
                     tag_in_map = observed_orientation.apply(np.array([base_link_to_tag.transform.translation.x,
-                                                                      base_link_to_tag.transform.translation.y, 
-                                                                      base_link_to_tag.transform.translation.z]), False)
+                                                                        base_link_to_tag.transform.translation.y, 
+                                                                        base_link_to_tag.transform.translation.z]), False)
 
                     observation = np.array([map_to_tag.transform.translation.x - tag_in_map[0],
                                             map_to_tag.transform.translation.y - tag_in_map[1],
@@ -192,11 +213,11 @@ class AROV_EKF_Global(Node):
                                             *observed_orientation.as_euler('xyz')])
                     
                     h_jacobian = np.array([[1, 0, 0, 0, 0, 0],
-                                           [0, 1, 0, 0, 0, 0],
-                                           [0, 0, 1, 0, 0, 0],
-                                           [0, 0, 0, 1, 0, 0],
-                                           [0, 0, 0, 0, 1, 0],
-                                           [0, 0, 0, 0, 0, 1]])
+                                            [0, 1, 0, 0, 0, 0],
+                                            [0, 0, 1, 0, 0, 0],
+                                            [0, 0, 0, 1, 0, 0],
+                                            [0, 0, 0, 0, 1, 0],
+                                            [0, 0, 0, 0, 0, 1]])
 
                     self.correct('apriltag', [True, True, True, True, True, True], observation, h_jacobian)
 
@@ -207,11 +228,6 @@ class AROV_EKF_Global(Node):
                         base_link_to_tag.header.stamp = self.get_clock().now().to_msg()
 
                         self.tf_broadcaster.sendTransform(base_link_to_tag)
-
-                except TransformException as ex:
-                    self.get_logger().info(
-                        f'Could not transform {f'{self.arov}/base_link'} or map to {tag_frame}: {ex}')
-                    return
 
     def predict(self):
         '''
@@ -232,13 +248,20 @@ class AROV_EKF_Global(Node):
                 self.time_km1 = self.get_clock().now().nanoseconds
             return
         
+        odom_to_base_link = None
 
-        try:
+        try :
             odom_to_base_link = self.tf_buffer.lookup_transform(
                 f'{self.arov}/odom',
                 f'{self.arov}/base_link',
                 rclpy.time.Time())
             
+        except TransformException as ex :
+            self.get_logger().info(
+                f'Could not transform odom to base_link: {ex}')
+            return
+        
+        if odom_to_base_link is not None :
             time_k = self.get_clock().now().nanoseconds
             dt =  (time_k - self.time_km1) / 10.0**9                                # Time since last prediction
             self.time_km1 = time_k
@@ -259,11 +282,6 @@ class AROV_EKF_Global(Node):
 
             F = np.diag([1, 1, 1, 1, 1, 1])
             self.cov = F @ self.cov @ F.transpose() + (dt * self.predict_noise)
-        
-        except TransformException as ex:
-            self.get_logger().info(
-                f'Could not transform odom to base_link: {ex}')
-            return
 
     def correct(self, observation_name: str, state_mask: list[bool], observation: np.ndarray, h_jacobian: np.ndarray):
         '''
