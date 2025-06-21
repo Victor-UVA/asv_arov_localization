@@ -27,7 +27,7 @@ class AROV_EKF_Global(Node):
             ('~depth_noise', [0.75]),                                                   # Sensor noise values.
             ('~compass_noise', [0.5]),
             ('~roll_pitch_noise', [0.125, 0.125]),
-            ('~apriltag_noise', [1.5, 1.5, 1.5, 0.5, 0.5, 0.5, 0.5])
+            ('~apriltag_noise', [2.5, 2.5, 2.5, 0.25, 0.25, 0.25, 0.25])
         ])
 
         self.ros_bag = self.get_parameter('~ros_bag').value
@@ -179,46 +179,46 @@ class AROV_EKF_Global(Node):
         if msg.detections :
             for tag in msg.detections :
                 tag_frame = f'{tag.family}:{tag.id}'
+
+                base_link_to_tag = None
+                map_to_tag = None
                 
-                tag_to_base_link = None
-                arov_observation = None
-
                 try :
-                    tag_to_base_link = self.tf_buffer.lookup_transform(
-                        tag_frame,
+                    base_link_to_tag = self.tf_buffer.lookup_transform(
                         f'{self.arov}/base_link',
+                        tag_frame,
                         rclpy.time.Time())
-                    
-                    tag_to_base_link.header.frame_id = f'{tag_frame}_true'
-                    tag_to_base_link.child_frame_id = f'{self.arov}/base_link_obs_apriltag'
-
-                    self.tf_broadcaster.sendTransform(tag_to_base_link)
-                    
                 except TransformException as ex :
                     self.get_logger().info(f'Could not transform {self.arov}/base_link to {tag_frame}: {ex}')
                     continue
 
-                # TODO Time lag
-                # TODO Only catches one AprilTag for update per detection msg
-
                 try :
-                    arov_observation = self.tf_buffer.lookup_transform(
+                    map_to_tag = self.tf_buffer.lookup_transform(
                         'map',
-                        f'{self.arov}/base_link_obs_apriltag',
+                        f'{tag_frame}_true',
                         rclpy.time.Time())
-                    
                 except TransformException as ex :
-                    self.get_logger().info(f'Could not transform {self.arov}/base_link_obs_apriltag to map: {ex}')
+                    self.get_logger().info(f'Could not transform map to {tag_frame}: {ex}')
                     continue
                     
-                if arov_observation is not None :
-                    observation = np.array([arov_observation.transform.translation.x,
-                                            arov_observation.transform.translation.y,
-                                            arov_observation.transform.translation.z,
-                                            arov_observation.transform.rotation.x,
-                                            arov_observation.transform.rotation.y,
-                                            arov_observation.transform.rotation.z,
-                                            arov_observation.transform.rotation.w])
+                if base_link_to_tag is not None and map_to_tag is not None :
+                    observed_orientation = Rotation.from_quat([map_to_tag.transform.rotation.x,
+                                                               map_to_tag.transform.rotation.y,
+                                                               map_to_tag.transform.rotation.z,
+                                                               map_to_tag.transform.rotation.w]) *\
+                                           Rotation.from_quat([base_link_to_tag.transform.rotation.x,
+                                                               base_link_to_tag.transform.rotation.y,
+                                                               base_link_to_tag.transform.rotation.z,
+                                                               base_link_to_tag.transform.rotation.w]).inv()
+                    
+                    tag_in_map = observed_orientation.apply(np.array([base_link_to_tag.transform.translation.x,
+                                                                      base_link_to_tag.transform.translation.y, 
+                                                                      base_link_to_tag.transform.translation.z]))
+
+                    observation = np.array([map_to_tag.transform.translation.x - tag_in_map[0],
+                                            map_to_tag.transform.translation.y - tag_in_map[1],
+                                            map_to_tag.transform.translation.z - tag_in_map[2],
+                                            *observed_orientation.as_quat()])
                                         
                     h_jacobian = np.array([[1, 0, 0, 0, 0, 0, 0],
                                            [0, 1, 0, 0, 0, 0, 0],
@@ -231,6 +231,21 @@ class AROV_EKF_Global(Node):
                     self.correct('apriltag', [True, True, True, True, True, True, True], observation, h_jacobian)
 
                     if self.ros_bag:
+                        arov_in_map = TransformStamped()
+                        arov_in_map.header.frame_id = 'map'
+                        arov_in_map.header.stamp = self.get_clock().now().to_msg()
+                        arov_in_map.child_frame_id = f'{self.arov}/base_link_obs_apriltag'
+
+                        arov_in_map.transform.translation.x = observation[0]
+                        arov_in_map.transform.translation.y = observation[1]
+                        arov_in_map.transform.translation.z = observation[2]
+                        arov_in_map.transform.rotation.x = observation[3]
+                        arov_in_map.transform.rotation.y = observation[4]
+                        arov_in_map.transform.rotation.z = observation[5]
+                        arov_in_map.transform.rotation.w = observation[6]
+
+                        self.tf_broadcaster.sendTransform(arov_in_map)
+                        
                         try :
                             base_link_to_tag = self.tf_buffer.lookup_transform(
                                 f'{self.arov}/base_link',
