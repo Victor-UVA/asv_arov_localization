@@ -198,6 +198,9 @@ class AROV_EKF_Global(Node):
                     self.get_logger().info(f'Could not transform {self.arov}/base_link to {tag_frame}: {ex}')
                     continue
 
+                # TODO Time lag
+                # TODO Only catches one AprilTag for update per detection msg
+
                 try :
                     arov_observation = self.tf_buffer.lookup_transform(
                         'map',
@@ -335,12 +338,9 @@ class AROV_EKF_Global(Node):
             self.state[3:] = (angular_diff * Rotation.from_quat(self.state[3:])).as_quat()
 
             # Normalize quaternion
-            self.state[3:] = self.state[3:] / np.sum(self.state[3:])
+            self.state[3:] = self.state[3:] / np.linalg.norm(self.state[3:])
 
             self.odom_to_base_link_km1 = odom_to_base_link
-
-            # Normalize rotations between -pi to pi
-            # self.state[3:] = np.arctan2(np.sin(self.state[3:]), np.cos(self.state[3:]))
 
             F = np.diag([1, 1, 1, 1, 1, 1, 1])
             self.cov = F @ self.cov @ F.transpose() + (dt * self.predict_noise)
@@ -368,7 +368,7 @@ class AROV_EKF_Global(Node):
         self.cov = (np.eye(np.shape(self.cov)[0]) - K_gain @ np.atleast_2d(h_jacobian)) @ self.cov
 
         # Normalize quaternion
-        self.state[3:] = self.state[3:] / np.sum(self.state[3:])
+        self.state[3:] = self.state[3:] / np.linalg.norm(self.state[3:])
 
     def bag_testing(self, odom_to_base_link: TransformStamped):
         bag_odom = self.transform
