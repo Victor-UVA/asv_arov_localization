@@ -6,6 +6,7 @@ from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from apriltag_msgs.msg import AprilTagDetectionArray
 
+import rclpy.time
 from tf2_ros import TransformBroadcaster, TransformException
 from tf2_ros.buffer import Buffer
 from tf2_ros.transform_listener import TransformListener
@@ -19,18 +20,24 @@ class AROV_EKF_Global(Node):
     def __init__(self):
         super().__init__('arov_ekf_global')
         self.declare_parameters(namespace='',parameters=[
-            ('~ros_bag', True),                                         # Toggle for using bagged data and switching to sending test transforms
+            ('~ros_bag', True),                                               # Toggle for using bagged data and switching to sending test transforms
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-            ('~predict_noise', [0.5, 0.5, 0.5, 0.75, 0.75, 0.75]),   # Diagonals of the covariance matrix for prediction noise (if there should
-                                                                        # be non-zero covariance, change where this parameter is used from diag to array)
-            ('~depth_noise', [0.75]),                                    # Sensor noise values.
+            ('~predict_noise', [0.125, 0.125, 0.125, 0.125, 0.125, 0.125]),   # Diagonals of the covariance matrix for prediction noise (if there should
+                                                                              # be non-zero covariance, change where this parameter is used from diag to array)
+            ('~depth_noise', [0.75]),                                         # Sensor noise values.
             ('~compass_noise', [0.5]),
             ('~roll_pitch_noise', [0.125, 0.125]),
-            ('~apriltag_noise', [0.75, 0.75, 0.75, 0.25, 0.25, 0.25])
+            ('~apriltag_noise', [1.5, 1.5, 1.5, 0.5, 0.5, 0.5])
         ])
 
         self.ros_bag = self.get_parameter('~ros_bag').value
         self.arov = self.get_namespace().strip('/')
+        if self.ros_bag :
+            self.odom_frame = f'{self.arov}_bag/odom'
+            self.base_link_frame = f'{self.arov}_bag/base_link'
+        else :
+            self.odom_frame = f'{self.arov}/odom'
+            self.base_link_frame = f'{self.arov}/base_link'
 
         self.arov_pose_sub = self.create_subscription(
             Odometry,
@@ -51,6 +58,7 @@ class AROV_EKF_Global(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
         self.odom = None
+        self.odom_to_base_link_km1 = None
 
         self.transform = TransformStamped()
         self.transform.header.frame_id = 'map'
@@ -151,17 +159,17 @@ class AROV_EKF_Global(Node):
             global_depth = odom_to_global_rot.apply(odom_position)[2]
             global_rot = (odom_to_global_rot * msg_orientation).as_euler('xyz')
 
-            self.correct('depth', [False, False, True, False, False, False], np.array([0, 0, global_depth, 0, 0, 0]),
-                         np.array([0, 0, 1, 0, 0, 0]))
+            # self.correct('depth', [False, False, True, False, False, False], np.array([0, 0, global_depth, 0, 0, 0]),
+            #              np.array([0, 0, 1, 0, 0, 0]))
             
-            self.correct('compass', [False, False, False, False, False, True],
-                         np.array([0, 0, 0, 0, 0, global_rot[2]]),
-                         np.array([0, 0, 0, 0, 0, 1]))
+            # self.correct('compass', [False, False, False, False, False, True],
+            #              np.array([0, 0, 0, 0, 0, global_rot[2]]),
+            #              np.array([0, 0, 0, 0, 0, 1]))
             
-            self.correct('roll_pitch', [False, False, False, True, True, False],
-                         np.array([0, 0, 0, global_rot[0], global_rot[1], 0]),
-                         np.array([[0, 0, 0, 1, 0, 0],
-                                   [0, 0, 0, 0, 1, 0]]))
+            # self.correct('roll_pitch', [False, False, False, True, True, False],
+            #              np.array([0, 0, 0, global_rot[0], global_rot[1], 0]),
+            #              np.array([[0, 0, 0, 1, 0, 0],
+            #                        [0, 0, 0, 0, 1, 0]]))
 
     def arov_apriltag_detect_callback(self, msg: AprilTagDetectionArray):
         '''
@@ -172,62 +180,72 @@ class AROV_EKF_Global(Node):
             for tag in msg.detections :
                 tag_frame = f'{tag.family}:{tag.id}'
                 
-                base_link_to_tag = None
-                map_to_tag = None
+                tag_to_base_link = None
+                arov_observation = None
 
                 try :
-                    base_link_to_tag = self.tf_buffer.lookup_transform(
-                        f'{self.arov}/base_link',
+                    tag_to_base_link = self.tf_buffer.lookup_transform(
                         tag_frame,
+                        f'{self.arov}/base_link',
                         rclpy.time.Time())
                     
+                    tag_to_base_link.header.frame_id = f'{tag_frame}_true'
+                    tag_to_base_link.child_frame_id = f'{self.arov}/base_link_obs_apriltag'
+
+                    self.tf_broadcaster.sendTransform(tag_to_base_link)
+                    
                 except TransformException as ex :
-                    self.get_logger().info(
-                        f'Could not transform {f'{self.arov}/base_link'} to {tag_frame}: {ex}')
+                    self.get_logger().info(f'Could not transform {self.arov}/base_link to {tag_frame}: {ex}')
                     continue
 
                 try :
-                    map_to_tag = self.tf_buffer.lookup_transform(
+                    arov_observation = self.tf_buffer.lookup_transform(
                         'map',
-                        f'{tag_frame}_true',
+                        f'{self.arov}/base_link_obs_apriltag',
                         rclpy.time.Time())
                     
                 except TransformException as ex :
-                    self.get_logger().info(
-                        f'Could not transform map to {tag_frame}_true: {ex}')
+                    self.get_logger().info(f'Could not transform {self.arov}/base_link_obs_apriltag to map: {ex}')
                     continue
                     
-                if base_link_to_tag is not None and map_to_tag is not None :
-                    observed_orientation = Rotation.from_quat([map_to_tag.transform.rotation.x, map_to_tag.transform.rotation.y,
-                                                                map_to_tag.transform.rotation.z, map_to_tag.transform.rotation.w]) * \
-                                            Rotation.from_quat([base_link_to_tag.transform.rotation.x, base_link_to_tag.transform.rotation.y,
-                                                                base_link_to_tag.transform.rotation.z, base_link_to_tag.transform.rotation.w]).inv()
-                    
-                    tag_in_map = observed_orientation.apply(np.array([base_link_to_tag.transform.translation.x,
-                                                                        base_link_to_tag.transform.translation.y, 
-                                                                        base_link_to_tag.transform.translation.z]), False)
+                if arov_observation is not None :
+                    orientation = Rotation.from_quat([arov_observation.transform.rotation.x,
+                                                      arov_observation.transform.rotation.y,
+                                                      arov_observation.transform.rotation.z,
+                                                      arov_observation.transform.rotation.w]).as_euler('xyz', False)
 
-                    observation = np.array([map_to_tag.transform.translation.x - tag_in_map[0],
-                                            map_to_tag.transform.translation.y - tag_in_map[1],
-                                            map_to_tag.transform.translation.z - tag_in_map[2],
-                                            *observed_orientation.as_euler('xyz')])
-                    
+                    observation = np.array([arov_observation.transform.translation.x,
+                                            arov_observation.transform.translation.y,
+                                            arov_observation.transform.translation.z,
+                                            *orientation])
+                                        
                     h_jacobian = np.array([[1, 0, 0, 0, 0, 0],
-                                            [0, 1, 0, 0, 0, 0],
-                                            [0, 0, 1, 0, 0, 0],
-                                            [0, 0, 0, 1, 0, 0],
-                                            [0, 0, 0, 0, 1, 0],
-                                            [0, 0, 0, 0, 0, 1]])
+                                           [0, 1, 0, 0, 0, 0],
+                                           [0, 0, 1, 0, 0, 0],
+                                           [0, 0, 0, 1, 0, 0],
+                                           [0, 0, 0, 0, 1, 0],
+                                           [0, 0, 0, 0, 0, 1]])
 
                     self.correct('apriltag', [True, True, True, True, True, True], observation, h_jacobian)
 
                     if self.ros_bag:
+                        try :
+                            base_link_to_tag = self.tf_buffer.lookup_transform(
+                                f'{self.arov}/base_link',
+                                tag_frame,
+                                rclpy.time.Time())
+                            
+                        except TransformException as ex :
+                            self.get_logger().info(f'Could not transform {self.arov}/base_link to {tag_frame}: {ex}')
+                            continue
+
                         base_link_to_tag.header.frame_id = f'{self.arov}_bag/base_link'
                         base_link_to_tag.child_frame_id = f'{tag_frame}_bag'
 
                         base_link_to_tag.header.stamp = self.get_clock().now().to_msg()
 
                         self.tf_broadcaster.sendTransform(base_link_to_tag)
+
 
     def predict(self):
         '''
@@ -239,46 +257,92 @@ class AROV_EKF_Global(Node):
             - Orientation
             - Delta time
         '''
-        if self.state is None:
-            if self.odom is not None:
-                orientation = Rotation.from_quat([self.odom.pose.pose.orientation.x, self.odom.pose.pose.orientation.y,
-                                                  self.odom.pose.pose.orientation.z, self.odom.pose.pose.orientation.w]).as_euler('xyz')
-                self.state = np.array([self.odom.pose.pose.position.x, self.odom.pose.pose.position.y, self.odom.pose.pose.position.z,
-                                       *orientation])
-                self.time_km1 = self.get_clock().now().nanoseconds
+        if self.state is None :
+            odom_to_base_link = None
+
+            try :
+                odom_to_base_link = self.tf_buffer.lookup_transform(
+                    f'{self.arov}/odom',
+                    f'{self.arov}/base_link',
+                    rclpy.time.Time())
+                
+            except TransformException as ex :
+                self.get_logger().info(
+                    f'Could not transform base_link to odom: {ex}')
+                
+            if odom_to_base_link is not None :
+                orientation = Rotation.from_quat([odom_to_base_link.transform.rotation.x, odom_to_base_link.transform.rotation.y,
+                                                    odom_to_base_link.transform.rotation.z, odom_to_base_link.transform.rotation.w]).as_euler('xyz')
+                self.state = np.array([odom_to_base_link.transform.translation.x, odom_to_base_link.transform.translation.y,
+                                        odom_to_base_link.transform.translation.z, *orientation])
+                self.time_km1 = self.get_clock().now()
+                self.odom_to_base_link_km1 = odom_to_base_link
             return
         
+        base_link_to_map = None
         odom_to_base_link = None
 
         try :
-            odom_to_base_link = self.tf_buffer.lookup_transform(
-                f'{self.arov}/odom',
-                f'{self.arov}/base_link',
+            base_link_to_map = self.tf_buffer.lookup_transform(
+                self.base_link_frame,
+                'map',
                 rclpy.time.Time())
             
         except TransformException as ex :
             self.get_logger().info(
-                f'Could not transform odom to base_link: {ex}')
+                f'Could not transform base_link to map: {ex}')
             return
         
-        if odom_to_base_link is not None :
-            time_k = self.get_clock().now().nanoseconds
-            dt =  (time_k - self.time_km1) / 10.0**9                                # Time since last prediction
+        try :
+            odom_to_base_link = self.tf_buffer.lookup_transform(
+                self.odom_frame,
+                self.base_link_frame,
+                rclpy.time.Time())
+            
+        except TransformException as ex :
+            self.get_logger().info(
+                f'Could not transform base_link to odom: {ex}')
+            return
+        
+        if base_link_to_map is not None and odom_to_base_link is not None :
+            time_k = self.get_clock().now()
+            dt =  (time_k - self.time_km1).nanoseconds / 10.0**9                                # Time since last prediction
             self.time_km1 = time_k
+            
+            orientation_state = Rotation.from_euler('xyz', self.state[3:])
+            
+            angular_diff = Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+                                               odom_to_base_link.transform.rotation.y,
+                                               odom_to_base_link.transform.rotation.z,
+                                               odom_to_base_link.transform.rotation.w]) *\
+                           Rotation.from_quat([self.odom_to_base_link_km1.transform.rotation.x,
+                                               self.odom_to_base_link_km1.transform.rotation.y,
+                                               self.odom_to_base_link_km1.transform.rotation.z,
+                                               self.odom_to_base_link_km1.transform.rotation.w]).inv()
+            
+            odom_to_map = Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+                                              odom_to_base_link.transform.rotation.y,
+                                              odom_to_base_link.transform.rotation.z,
+                                              odom_to_base_link.transform.rotation.w]) *\
+                          Rotation.from_quat([base_link_to_map.transform.rotation.x,
+                                              base_link_to_map.transform.rotation.y,
+                                              base_link_to_map.transform.rotation.z,
+                                              base_link_to_map.transform.rotation.w])
 
-            orientation = Rotation.from_euler('xyz', self.state[3:]).inv() * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-                                                                                                 odom_to_base_link.transform.rotation.y,
-                                                                                                 odom_to_base_link.transform.rotation.z,
-                                                                                                 odom_to_base_link.transform.rotation.w])
+            linear_diff = odom_to_map.apply([odom_to_base_link.transform.translation.x,
+                                             odom_to_base_link.transform.translation.y,
+                                             odom_to_base_link.transform.translation.z]) -\
+                          odom_to_map.apply([self.odom_to_base_link_km1.transform.translation.x,
+                                             self.odom_to_base_link_km1.transform.translation.y,
+                                             self.odom_to_base_link_km1.transform.translation.z])
+            
+            self.state[3:] = (angular_diff * orientation_state).as_euler('xyz')
+            self.state[:3] += linear_diff
 
-            linear_vel = np.array([self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z])
-            angular_vel = np.array([self.odom.twist.twist.angular.x, self.odom.twist.twist.angular.y, self.odom.twist.twist.angular.z])
-
-            self.state[:3] += orientation.apply(linear_vel) * dt
-            self.state[3:] = (Rotation.from_euler('xyz', angular_vel * dt) * Rotation.from_euler('xyz', self.state[3:])).as_euler('xyz')
+            self.odom_to_base_link_km1 = odom_to_base_link
 
             # Normalize rotations between -pi to pi
-            self.state[3:] = np.arctan2(np.sin(self.state[3:]), np.cos(self.state[3:]))
+            # self.state[3:] = np.arctan2(np.sin(self.state[3:]), np.cos(self.state[3:]))
 
             F = np.diag([1, 1, 1, 1, 1, 1])
             self.cov = F @ self.cov @ F.transpose() + (dt * self.predict_noise)
@@ -306,7 +370,7 @@ class AROV_EKF_Global(Node):
         self.cov = (np.eye(np.shape(self.cov)[0]) - K_gain @ np.atleast_2d(h_jacobian)) @ self.cov
 
         # Normalize rotations between -pi to pi
-        self.state[3:] = np.arctan2(np.sin(self.state[3:]), np.cos(self.state[3:]))
+        # self.state[3:] = np.arctan2(np.sin(self.state[3:]), np.cos(self.state[3:]))
 
     def bag_testing(self, odom_to_base_link: TransformStamped):
         bag_odom = self.transform
