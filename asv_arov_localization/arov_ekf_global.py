@@ -24,9 +24,6 @@ class AROV_EKF_Global(Node):
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
             ('~predict_noise', [0.25, 0.25, 0.25]),                                                     # Diagonals of the covariance matrix for prediction noise (if there should
             ('~gyro_noise', [0.025, 0.025, 0.025]),
-            ('~depth_noise', [0.75]),                                                                   # Sensor noise values.
-            ('~compass_noise', [0.5, 0.5, 0.5, 0.5]),
-            ('~roll_pitch_noise', [0.125, 0.125, 0.125, 0.125]),
             ('~apriltag_noise', [1.5, 1.5, 1.5, 0.25, 0.25, 0.25, 0.25])
         ])
 
@@ -83,8 +80,6 @@ class AROV_EKF_Global(Node):
                 rclpy.time.Time())
             
         except TransformException as ex :
-            self.get_logger().info(
-                f'Could not transform odom to base_link: {ex}')
             return
             
 
@@ -135,7 +130,6 @@ class AROV_EKF_Global(Node):
                         tag_frame,
                         rclpy.time.Time())
                 except TransformException as ex :
-                    self.get_logger().info(f'Could not transform {self.arov}/base_link to {tag_frame}: {ex}')
                     continue
 
                 try :
@@ -144,7 +138,6 @@ class AROV_EKF_Global(Node):
                         f'{tag_frame}_true',
                         rclpy.time.Time())
                 except TransformException as ex :
-                    self.get_logger().info(f'Could not transform map to {tag_frame}: {ex}')
                     continue
                     
                 if base_link_to_tag is not None and map_to_tag is not None :
@@ -208,7 +201,6 @@ class AROV_EKF_Global(Node):
                                 rclpy.time.Time())
                             
                         except TransformException as ex :
-                            self.get_logger().info(f'Could not transform {self.arov}/base_link to {tag_frame}: {ex}')
                             continue
 
                         base_link_to_tag.header.frame_id = f'{self.arov}_bag/base_link'
@@ -233,9 +225,8 @@ class AROV_EKF_Global(Node):
                     rclpy.time.Time())
                 
             except TransformException as ex :
-                self.get_logger().info(
-                    f'Could not transform base_link to odom: {ex}')
-                
+                return
+
             if odom_to_base_link is not None :
                 self.state = np.array([odom_to_base_link.transform.translation.x,
                                        odom_to_base_link.transform.translation.y,
@@ -259,8 +250,6 @@ class AROV_EKF_Global(Node):
                 rclpy.time.Time())
             
         except TransformException as ex :
-            self.get_logger().info(
-                f'Could not transform base_link to map: {ex}')
             return
         
         try :
@@ -270,8 +259,6 @@ class AROV_EKF_Global(Node):
                 rclpy.time.Time())
             
         except TransformException as ex :
-            self.get_logger().info(
-                f'Could not transform base_link to odom: {ex}')
             return
         
         if base_link_to_map is not None and odom_to_base_link is not None :
@@ -296,26 +283,27 @@ class AROV_EKF_Global(Node):
                                     self.odom_to_base_link_km1.transform.translation.y,
                                     self.odom_to_base_link_km1.transform.translation.z])
             
+            # Angular prediction
+            angular_diff = Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+                                               odom_to_base_link.transform.rotation.y,
+                                               odom_to_base_link.transform.rotation.z,
+                                               odom_to_base_link.transform.rotation.w]) *\
+                           Rotation.from_quat([self.odom_to_base_link_km1.transform.rotation.x,
+                                               self.odom_to_base_link_km1.transform.rotation.y,
+                                               self.odom_to_base_link_km1.transform.rotation.z,
+                                               self.odom_to_base_link_km1.transform.rotation.w]).inv()
+            
+            angular_prediction = (angular_diff * Rotation.from_quat([*self.state[4:], self.state[3]])).as_quat()
+            
             self.state[:3] += odom_to_map.inv().apply(linear_diff)
-
-            # Angular prediction (w 3, x 4, y 5, z 6)
-            self.state[3:] = np.array([self.state[3] - (dt/2) * self.odom.twist.twist.angular.x * self.state[4] - (dt/2) * self.odom.twist.twist.angular.y * self.state[5] - (dt/2) * self.odom.twist.twist.angular.z * self.state[6],
-                                       self.state[4] + (dt/2) * self.odom.twist.twist.angular.x * self.state[3] - (dt/2) * self.odom.twist.twist.angular.y * self.state[6] + (dt/2) * self.odom.twist.twist.angular.z * self.state[5],
-                                       self.state[5] + (dt/2) * self.odom.twist.twist.angular.x * self.state[6] + (dt/2) * self.odom.twist.twist.angular.y * self.state[3] - (dt/2) * self.odom.twist.twist.angular.z * self.state[4],
-                                       self.state[6] - (dt/2) * self.odom.twist.twist.angular.x * self.state[5] + (dt/2) * self.odom.twist.twist.angular.y * self.state[4] + (dt/2) * self.odom.twist.twist.angular.z * self.state[3]])
+            self.state[3:] = [angular_prediction[3], *angular_prediction[:3]]
 
             # Normalize quaternion
             self.state[3:] = self.state[3:] / np.linalg.norm(self.state[3:])
 
             self.odom_to_base_link_km1 = odom_to_base_link
 
-            F = np.array([[1, 0, 0, 0, 0, 0, 0],
-                          [0, 1, 0, 0, 0, 0, 0],
-                          [0, 0, 1, 0, 0, 0, 0],
-                          [0, 0, 0, 1, -(dt/2) * self.odom.twist.twist.angular.x, -(dt/2) * self.odom.twist.twist.angular.y, -(dt/2) * self.odom.twist.twist.angular.z],
-                          [0, 0, 0, (dt/2) * self.odom.twist.twist.angular.x, 1, (dt/2) * self.odom.twist.twist.angular.z, -(dt/2) * self.odom.twist.twist.angular.y],
-                          [0, 0, 0, (dt/2) * self.odom.twist.twist.angular.y, -(dt/2) * self.odom.twist.twist.angular.z, 1, (dt/2) * self.odom.twist.twist.angular.x],
-                          [0, 0, 0, (dt/2) * self.odom.twist.twist.angular.z, (dt/2) * self.odom.twist.twist.angular.y, -(dt/2) * self.odom.twist.twist.angular.x, 1]])
+            F = np.diag([1, 1, 1, 1, 1, 1, 1])
             
             linear_noise = dt * np.power(np.diag(self.get_parameter('~predict_noise').value), 2)
             
