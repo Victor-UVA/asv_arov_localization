@@ -125,57 +125,6 @@ class AROV_EKF_Global(Node):
     def arov_pose_callback(self, msg: Odometry):
         self.odom = msg
 
-        # if self.state is None:
-        #     return
-
-        # odom_to_base_link = None
-
-        # try :
-        #     odom_to_base_link = self.tf_buffer.lookup_transform(
-        #         f'{self.arov}/odom',
-        #         f'{self.arov}/base_link',
-        #         rclpy.time.Time())
-            
-        # except TransformException as ex :
-        #     self.get_logger().info(
-        #         f'Could not transform odom to base_link: {ex}')
-        #     return
-            
-        # if odom_to_base_link is not None :
-        #     msg_orientation = Rotation.from_quat([msg.pose.pose.orientation.x,
-        #                                           msg.pose.pose.orientation.y,
-        #                                           msg.pose.pose.orientation.z,
-        #                                           msg.pose.pose.orientation.w])
-
-        #     odom_to_global_rot = Rotation.from_quat(self.state[3:]).inv() * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-        #                                                                                         odom_to_base_link.transform.rotation.y,
-        #                                                                                         odom_to_base_link.transform.rotation.z,
-        #                                                                                         odom_to_base_link.transform.rotation.w])
-
-        #     odom_position = np.array([msg.pose.pose.position.x,
-        #                               msg.pose.pose.position.y,
-        #                               msg.pose.pose.position.z])
-            
-        #     global_depth = odom_to_global_rot.apply(odom_position)[2]
-        #     global_rot = (odom_to_global_rot * msg_orientation).as_quat()
-
-            # self.correct('depth', [False, False, True, False, False, False], np.array([0, 0, global_depth, 0, 0, 0]),
-            #              np.array([0, 0, 1, 0, 0, 0]))
-            
-            # self.correct('compass', [False, False, False, True, True, True, True],
-            #              np.array([0, 0, 0, *global_rot]),
-            #              np.array([[0, 0, 0, 1, 0, 0, 0],
-            #                        [0, 0, 0, 0, 1, 0, 0],
-            #                        [0, 0, 0, 0, 0, 1, 0],
-            #                        [0, 0, 0, 0, 0, 0, 1]]))
-            
-            # self.correct('roll_pitch', [False, False, False, True, True, True, True],
-            #              np.array([0, 0, 0, *global_rot]),
-            #              np.array([[0, 0, 0, 1, 0, 0, 0],
-            #                        [0, 0, 0, 0, 1, 0, 0],
-            #                        [0, 0, 0, 0, 0, 1, 0],
-            #                        [0, 0, 0, 0, 0, 0, 1]]))
-
     def arov_apriltag_detect_callback(self, msg: AprilTagDetectionArray):
         '''
         Runs full state correction using AprilTag detections whenever one or more AprilTags are observed.  Assumes a map of true AprilTag transforms
