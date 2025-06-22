@@ -22,11 +22,11 @@ class AROV_EKF_Global(Node):
         self.declare_parameters(namespace='',parameters=[
             ('~ros_bag', True),                                                     # Toggle for using bagged data and switching to sending test transforms
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-            ('~predict_noise', [0.25, 0.25, 0.25]),                                 # Diagonals of the covariance matrix for prediction noise (if there should
-            ('~gyro_noise', [0.025, 0.025, 0.025]),
-            ('~apriltag_noise', [1.5, 1.5, 1.5, 0.25, 0.25, 0.25, 0.25]),
-            ('~linear_vel_scale', 10.0),                                            # Scaling factors for AprilTag noise
-            ('~angular_vel_scale', 5.0),
+            ('~predict_noise', [0.025, 0.025, 0.025]),                              # Diagonals of the covariance matrix for prediction noise (if there should
+            ('~gyro_noise', [0.0025, 0.0025, 0.0025]),
+            ('~apriltag_noise', [1.5, 1.5, 1.5, 0.025, 0.025, 0.025, 0.025]),
+            ('~linear_vel_scale', 2.0),                                             # Scaling factors for AprilTag noise
+            ('~angular_vel_scale', 2.0),
             ('~tag_dist_scale', 2.0)
         ])
 
@@ -187,11 +187,9 @@ class AROV_EKF_Global(Node):
                     angular_vel = np.linalg.norm([self.odom.twist.twist.angular.x, self.odom.twist.twist.angular.y, self.odom.twist.twist.angular.z])
                     tag_dist = np.linalg.norm([base_link_to_tag.transform.translation.x, base_link_to_tag.transform.translation.y, base_link_to_tag.transform.translation.z])
 
-                    self.get_logger().info(f'{self.get_parameter('~linear_vel_scale').value * linear_vel}, {self.get_parameter('~angular_vel_scale').value * angular_vel}, {self.get_parameter('~tag_dist_scale').value * tag_dist}')
-
                     observation_noise *= self.get_parameter('~linear_vel_scale').value * linear_vel *\
                                          self.get_parameter('~angular_vel_scale').value * angular_vel *\
-                                         self.get_parameter('~tag_dist_scale').value * tag_dist
+                                         tag_dist ** self.get_parameter('~tag_dist_scale').value
 
                     h_expected = self.state
 
