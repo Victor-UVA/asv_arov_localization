@@ -22,8 +22,8 @@ class AROV_EKF_Global(Node):
         self.declare_parameters(namespace='',parameters=[
             ('~ros_bag', True),                                                                         # Toggle for using bagged data and switching to sending test transforms
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-            ('~predict_noise', [0.25, 0.25, 0.25, 0.0025, 0.0025, 0.0025, 0.0025]),                     # Diagonals of the covariance matrix for prediction noise (if there should
-                                                                                                        # be non-zero covariance, change where this parameter is used from diag to array)
+            ('~predict_noise', [0.25, 0.25, 0.25]),                                                     # Diagonals of the covariance matrix for prediction noise (if there should
+            ('~gyro_noise', [0.025, 0.025, 0.025]),
             ('~depth_noise', [0.75]),                                                                   # Sensor noise values.
             ('~compass_noise', [0.5, 0.5, 0.5, 0.5]),
             ('~roll_pitch_noise', [0.125, 0.125, 0.125, 0.125]),
@@ -65,16 +65,8 @@ class AROV_EKF_Global(Node):
         self.transform.child_frame_id = f'{self.arov}/odom'
 
         self.time_km1 = None
-        self.state = None                                                                       # State estimate: x, y, z, q(x, y, z, w)
+        self.state = None                                                                       # State estimate: x, y, z, q(w, x, y, z)
         self.cov = np.diag(self.get_parameter('~initial_cov').value)                            # Covariance estimate
-        self.predict_noise = np.power(np.diag(self.get_parameter('~predict_noise').value), 2)
-        self.correct_noise = {'depth': np.diag(self.get_parameter('~depth_noise').value),
-                              'compass': np.diag(self.get_parameter('~compass_noise').value),
-                              'roll_pitch': np.diag(self.get_parameter('~roll_pitch_noise').value),
-                              'apriltag': np.diag(self.get_parameter('~apriltag_noise').value)}
-        
-        for noise in self.correct_noise:
-            self.correct_noise[noise] = np.power(self.correct_noise[noise], 2)
 
         self.predict_timer = self.create_timer(1.0/50.0, self.predict)
         self.pub_timer = self.create_timer(1.0/50.0, self.publish_transform)
@@ -97,10 +89,10 @@ class AROV_EKF_Global(Node):
             
 
         if odom_to_base_link is not None :
-            orientation = Rotation.from_quat(self.state[3:]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-                                                                                   odom_to_base_link.transform.rotation.y,
-                                                                                   odom_to_base_link.transform.rotation.z,
-                                                                                   odom_to_base_link.transform.rotation.w]).inv()
+            orientation = Rotation.from_quat([*self.state[4:], self.state[3]]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+                                                                                                     odom_to_base_link.transform.rotation.y,
+                                                                                                     odom_to_base_link.transform.rotation.z,
+                                                                                                     odom_to_base_link.transform.rotation.w]).inv()
             
             translation = self.state[:3] - orientation.apply(np.array([odom_to_base_link.transform.translation.x,
                                                                        odom_to_base_link.transform.translation.y,
@@ -168,21 +160,30 @@ class AROV_EKF_Global(Node):
                     tag_in_map = observed_orientation.apply(np.array([base_link_to_tag.transform.translation.x,
                                                                       base_link_to_tag.transform.translation.y, 
                                                                       base_link_to_tag.transform.translation.z]))
+                    
+                    observed_orientation = observed_orientation.as_quat()
 
                     observation = np.array([map_to_tag.transform.translation.x - tag_in_map[0],
                                             map_to_tag.transform.translation.y - tag_in_map[1],
                                             map_to_tag.transform.translation.z - tag_in_map[2],
-                                            *observed_orientation.as_quat()])
+                                            observed_orientation[3],
+                                            observed_orientation[0],
+                                            observed_orientation[1],
+                                            observed_orientation[2]])
                                         
-                    h_jacobian = np.array([[1, 0, 0, 0, 0, 0, 0],
+                    H_jacobian = np.array([[1, 0, 0, 0, 0, 0, 0],
                                            [0, 1, 0, 0, 0, 0, 0],
                                            [0, 0, 1, 0, 0, 0, 0],
                                            [0, 0, 0, 1, 0, 0, 0],
                                            [0, 0, 0, 0, 1, 0, 0],
                                            [0, 0, 0, 0, 0, 1, 0],
                                            [0, 0, 0, 0, 0, 0, 1]])
+                    
+                    observation_noise = np.diag([1.5, 1.5, 1.5, 0.25, 0.25, 0.25, 0.25])
 
-                    self.correct('apriltag', [True, True, True, True, True, True, True], observation, h_jacobian)
+                    h_expected = self.state
+
+                    self.correct(observation, observation_noise, h_expected, H_jacobian)
 
                     if self.ros_bag:
                         arov_in_map = TransformStamped()
@@ -193,10 +194,10 @@ class AROV_EKF_Global(Node):
                         arov_in_map.transform.translation.x = observation[0]
                         arov_in_map.transform.translation.y = observation[1]
                         arov_in_map.transform.translation.z = observation[2]
-                        arov_in_map.transform.rotation.x = observation[3]
-                        arov_in_map.transform.rotation.y = observation[4]
-                        arov_in_map.transform.rotation.z = observation[5]
-                        arov_in_map.transform.rotation.w = observation[6]
+                        arov_in_map.transform.rotation.x = observation[4]
+                        arov_in_map.transform.rotation.y = observation[5]
+                        arov_in_map.transform.rotation.z = observation[6]
+                        arov_in_map.transform.rotation.w = observation[3]
 
                         self.tf_broadcaster.sendTransform(arov_in_map)
                         
@@ -222,7 +223,7 @@ class AROV_EKF_Global(Node):
         '''
         Propogate forward the position estimate and convariance.
         '''
-        if self.state is None :
+        if self.state is None or self.odom is None :
             odom_to_base_link = None
 
             try :
@@ -239,10 +240,10 @@ class AROV_EKF_Global(Node):
                 self.state = np.array([odom_to_base_link.transform.translation.x,
                                        odom_to_base_link.transform.translation.y,
                                        odom_to_base_link.transform.translation.z,
+                                       odom_to_base_link.transform.rotation.w,
                                        odom_to_base_link.transform.rotation.x,
                                        odom_to_base_link.transform.rotation.y,
-                                       odom_to_base_link.transform.rotation.z,
-                                       odom_to_base_link.transform.rotation.w])
+                                       odom_to_base_link.transform.rotation.z])
                 
                 self.time_km1 = self.get_clock().now()
                 self.odom_to_base_link_km1 = odom_to_base_link
@@ -278,15 +279,7 @@ class AROV_EKF_Global(Node):
             dt =  (time_k - self.time_km1).nanoseconds / 10.0**9                                # Time since last prediction
             self.time_km1 = time_k
             
-            angular_diff = Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-                                               odom_to_base_link.transform.rotation.y,
-                                               odom_to_base_link.transform.rotation.z,
-                                               odom_to_base_link.transform.rotation.w]) *\
-                           Rotation.from_quat([self.odom_to_base_link_km1.transform.rotation.x,
-                                               self.odom_to_base_link_km1.transform.rotation.y,
-                                               self.odom_to_base_link_km1.transform.rotation.z,
-                                               self.odom_to_base_link_km1.transform.rotation.w]).inv()
-            
+            # Linear prediction
             odom_to_map = Rotation.from_quat([base_link_to_map.transform.rotation.x,
                                               base_link_to_map.transform.rotation.y,
                                               base_link_to_map.transform.rotation.z,
@@ -304,37 +297,58 @@ class AROV_EKF_Global(Node):
                                     self.odom_to_base_link_km1.transform.translation.z])
             
             self.state[:3] += odom_to_map.inv().apply(linear_diff)
-            self.state[3:] = (angular_diff * Rotation.from_quat(self.state[3:])).as_quat()
+
+            # Angular prediction (w 3, x 4, y 5, z 6)
+            self.state[3:] = np.array([self.state[3] - (dt/2) * self.odom.twist.twist.angular.x * self.state[4] - (dt/2) * self.odom.twist.twist.angular.y * self.state[5] - (dt/2) * self.odom.twist.twist.angular.z * self.state[6],
+                                       self.state[4] + (dt/2) * self.odom.twist.twist.angular.x * self.state[3] - (dt/2) * self.odom.twist.twist.angular.y * self.state[6] + (dt/2) * self.odom.twist.twist.angular.z * self.state[5],
+                                       self.state[5] + (dt/2) * self.odom.twist.twist.angular.x * self.state[6] + (dt/2) * self.odom.twist.twist.angular.y * self.state[3] - (dt/2) * self.odom.twist.twist.angular.z * self.state[4],
+                                       self.state[6] - (dt/2) * self.odom.twist.twist.angular.x * self.state[5] + (dt/2) * self.odom.twist.twist.angular.y * self.state[4] + (dt/2) * self.odom.twist.twist.angular.z * self.state[3]])
 
             # Normalize quaternion
             self.state[3:] = self.state[3:] / np.linalg.norm(self.state[3:])
 
             self.odom_to_base_link_km1 = odom_to_base_link
 
-            F = np.diag([1, 1, 1, 1, 1, 1, 1])
-            self.cov = F @ self.cov @ F.transpose() + (dt * self.predict_noise)
+            F = np.array([[1, 0, 0, 0, 0, 0, 0],
+                          [0, 1, 0, 0, 0, 0, 0],
+                          [0, 0, 1, 0, 0, 0, 0],
+                          [0, 0, 0, 1, -(dt/2) * self.odom.twist.twist.angular.x, -(dt/2) * self.odom.twist.twist.angular.y, -(dt/2) * self.odom.twist.twist.angular.z],
+                          [0, 0, 0, (dt/2) * self.odom.twist.twist.angular.x, 1, (dt/2) * self.odom.twist.twist.angular.z, -(dt/2) * self.odom.twist.twist.angular.y],
+                          [0, 0, 0, (dt/2) * self.odom.twist.twist.angular.y, -(dt/2) * self.odom.twist.twist.angular.z, 1, (dt/2) * self.odom.twist.twist.angular.x],
+                          [0, 0, 0, (dt/2) * self.odom.twist.twist.angular.z, (dt/2) * self.odom.twist.twist.angular.y, -(dt/2) * self.odom.twist.twist.angular.x, 1]])
+            
+            linear_noise = dt * np.power(np.diag(self.get_parameter('~predict_noise').value), 2)
+            
+            W_k = (dt/2) * np.array([[-self.state[4], -self.state[5], -self.state[6]],
+                                     [self.state[3], -self.state[6], self.state[5]],
+                                     [self.state[6], self.state[3], -self.state[4]],
+                                     [-self.state[5], self.state[4], self.state[3]]])
+            angular_noise = W_k @ np.power(np.diag(self.get_parameter('~gyro_noise').value), 2) @ W_k.transpose()
 
-    def correct(self, observation_name: str, state_mask: list[bool], observation: np.ndarray, h_jacobian: np.ndarray):
+            predict_noise = np.zeros((7, 7))
+            predict_noise[:3, :3] = linear_noise
+            predict_noise[3:, 3:] = angular_noise
+            
+            self.cov = F @ self.cov @ F.transpose() + (predict_noise)
+
+    def correct(self, observation: np.ndarray, observation_noise: np.ndarray, h_expected: np.ndarray, H_jacobian: np.ndarray):
         '''
         Generic correction for a state to run whenever an observation comes in.
 
         Args:
-            observation_name (str): Name that is used for the state or states being corrected.
-            state_mask (list[bool]): Mask for which states are being observed.  Same length as the number of states being estimated.
-            observation (ndarray): The observation being used to correct the state estimate.  Dimensions should match the states being estimated.
+            observation (ndarray): The observation being used to correct the state estimate.
+            observation_noise (ndarray): The noise associated with the observation at the current timestep.
+            h_expected (ndarray): The expected observation based on the current state.
             h_jacobian (ndarray): The jacobian of the observation function.
         '''
         if self.state is None: return
 
-        err = np.atleast_2d(np.extract(state_mask, observation - self.state)).transpose()
-        err_cov = (h_jacobian @ self.cov @ h_jacobian.transpose()) + self.correct_noise[observation_name]
-        K_gain = self.cov @ np.atleast_2d(h_jacobian).transpose() @ np.linalg.inv(err_cov)
+        err = observation - h_expected
+        err_cov = (H_jacobian @ self.cov @ H_jacobian.transpose()) + observation_noise
+        K_gain = self.cov @ H_jacobian.transpose() @ np.linalg.inv(err_cov)
 
-        state_correction = np.zeros_like(self.state)
-        np.copyto(state_correction, (K_gain @ err).transpose())
-
-        self.state += state_correction
-        self.cov = (np.eye(np.shape(self.cov)[0]) - K_gain @ np.atleast_2d(h_jacobian)) @ self.cov
+        self.state += (K_gain @ err.transpose()).transpose()
+        self.cov = (np.eye(np.shape(self.cov)[0]) - K_gain @ H_jacobian) @ self.cov
 
         # Normalize quaternion
         self.state[3:] = self.state[3:] / np.linalg.norm(self.state[3:])
@@ -364,3 +378,57 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+            # Prediction with gyro readings
+            # # Linear prediction
+            # odom_to_map = Rotation.from_quat([base_link_to_map.transform.rotation.x,
+            #                                   base_link_to_map.transform.rotation.y,
+            #                                   base_link_to_map.transform.rotation.z,
+            #                                   base_link_to_map.transform.rotation.w]) *\
+            #               Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+            #                                   odom_to_base_link.transform.rotation.y,
+            #                                   odom_to_base_link.transform.rotation.z,
+            #                                   odom_to_base_link.transform.rotation.w])
+
+            # linear_diff = np.array([odom_to_base_link.transform.translation.x,
+            #                         odom_to_base_link.transform.translation.y,
+            #                         odom_to_base_link.transform.translation.z]) -\
+            #               np.array([self.odom_to_base_link_km1.transform.translation.x,
+            #                         self.odom_to_base_link_km1.transform.translation.y,
+            #                         self.odom_to_base_link_km1.transform.translation.z])
+            
+            # self.state[:3] += odom_to_map.inv().apply(linear_diff)
+
+            # # Angular prediction (w 3, x 4, y 5, z 6)
+            # self.state[3:] = np.array([self.state[3] - (dt/2) * self.odom.twist.twist.angular.x * self.state[4] - (dt/2) * self.odom.twist.twist.angular.y * self.state[5] - (dt/2) * self.odom.twist.twist.angular.z * self.state[6],
+            #                            self.state[4] + (dt/2) * self.odom.twist.twist.angular.x * self.state[3] - (dt/2) * self.odom.twist.twist.angular.y * self.state[6] + (dt/2) * self.odom.twist.twist.angular.z * self.state[5],
+            #                            self.state[5] + (dt/2) * self.odom.twist.twist.angular.x * self.state[6] + (dt/2) * self.odom.twist.twist.angular.y * self.state[3] - (dt/2) * self.odom.twist.twist.angular.z * self.state[4],
+            #                            self.state[6] - (dt/2) * self.odom.twist.twist.angular.x * self.state[5] + (dt/2) * self.odom.twist.twist.angular.y * self.state[4] + (dt/2) * self.odom.twist.twist.angular.z * self.state[3]])
+
+            # # Normalize quaternion
+            # self.state[3:] = self.state[3:] / np.linalg.norm(self.state[3:])
+
+            # self.odom_to_base_link_km1 = odom_to_base_link
+
+            # F = np.array([[1, 0, 0, 0, 0, 0, 0],
+            #               [0, 1, 0, 0, 0, 0, 0],
+            #               [0, 0, 1, 0, 0, 0, 0],
+            #               [0, 0, 0, 1, -(dt/2) * self.odom.twist.twist.angular.x, -(dt/2) * self.odom.twist.twist.angular.y, -(dt/2) * self.odom.twist.twist.angular.z],
+            #               [0, 0, 0, (dt/2) * self.odom.twist.twist.angular.x, 1, (dt/2) * self.odom.twist.twist.angular.z, -(dt/2) * self.odom.twist.twist.angular.y],
+            #               [0, 0, 0, (dt/2) * self.odom.twist.twist.angular.y, -(dt/2) * self.odom.twist.twist.angular.z, 1, (dt/2) * self.odom.twist.twist.angular.x],
+            #               [0, 0, 0, (dt/2) * self.odom.twist.twist.angular.z, (dt/2) * self.odom.twist.twist.angular.y, -(dt/2) * self.odom.twist.twist.angular.x, 1]])
+            
+            # linear_noise = dt * np.power(np.diag(self.get_parameter('~predict_noise').value), 2)
+            
+            # W_k = (dt/2) * np.array([[-self.state[4], -self.state[5], -self.state[6]],
+            #                          [self.state[3], -self.state[6], self.state[5]],
+            #                          [self.state[6], self.state[3], -self.state[4]],
+            #                          [-self.state[5], self.state[4], self.state[3]]])
+            # angular_noise = W_k @ np.power(np.diag(self.get_parameter('~gyro_noise').value), 2) @ W_k.transpose()
+
+            # predict_noise = np.zeros((7, 7))
+            # predict_noise[:3, :3] = linear_noise
+            # predict_noise[3:, 3:] = angular_noise
+            
+            # self.cov = F @ self.cov @ F.transpose() + (predict_noise)
