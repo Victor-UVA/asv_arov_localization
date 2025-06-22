@@ -22,8 +22,8 @@ class AROV_EKF_Global(Node):
         self.declare_parameters(namespace='',parameters=[
             ('~ros_bag', True),                                                     # Toggle for using bagged data and switching to sending test transforms
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-            ('~predict_noise', [0.025, 0.025, 0.025]),                              # Diagonals of the covariance matrix for prediction noise (if there should
-            ('~gyro_noise', [0.0025, 0.0025, 0.0025]),
+            ('~predict_noise', [0.025, 0.025, 0.025]),                              # Diagonals of the covariance matrix for the linear portion of prediction noise
+            ('~gyro_noise', [0.0025, 0.0025, 0.0025]),                              # Used to compute the angular portion of prediction noise
             ('~apriltag_noise', [1.5, 1.5, 1.5, 0.025, 0.025, 0.025, 0.025]),
             ('~linear_vel_scale', 2.0),                                             # Scaling factors for AprilTag noise
             ('~angular_vel_scale', 2.0),
