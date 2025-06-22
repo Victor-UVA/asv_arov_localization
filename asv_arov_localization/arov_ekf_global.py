@@ -24,10 +24,10 @@ class AROV_EKF_Global(Node):
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
             ('~predict_noise', [0.025, 0.025, 0.025]),                              # Diagonals of the covariance matrix for the linear portion of prediction noise
             ('~gyro_noise', [0.0025, 0.0025, 0.0025]),                              # Used to compute the angular portion of prediction noise
-            ('~apriltag_noise', [1.5, 1.5, 1.5, 0.025, 0.025, 0.025, 0.025]),
+            ('~apriltag_noise', [0.75, 0.75, 0.75, 0.025, 0.025, 0.025, 0.025]),
             ('~linear_vel_scale', 2.0),                                             # Scaling factors for AprilTag noise
-            ('~angular_vel_scale', 2.0),
-            ('~tag_dist_scale', 2.0)
+            ('~angular_vel_scale', 4.0),
+            ('~tag_dist_scale', 3.0)
         ])
 
         self.ros_bag = self.get_parameter('~ros_bag').value
@@ -178,17 +178,17 @@ class AROV_EKF_Global(Node):
                     observation_noise = np.array([[1.5, 0, 0, 0, 0, 0, 0],
                                                   [0, 1.5, 0, 0, 0, 0, 0],
                                                   [0, 0, 1.5, 0, 0, 0, 0],
-                                                  [0, 0, 0, 0.25, 0.025, 0.025, 0.025],
-                                                  [0, 0, 0, 0.025, 0.25, 0.025, 0.025],
-                                                  [0, 0, 0, 0.025, 0.025, 0.25, 0.025],
-                                                  [0, 0, 0, 0.025, 0.025, 0.025, 0.25]])
+                                                  [0, 0, 0, 0.25, 0.0, 0.0, 0.0],
+                                                  [0, 0, 0, 0.0, 0.25, 0.0, 0.0],
+                                                  [0, 0, 0, 0.0, 0.0, 0.25, 0.0],
+                                                  [0, 0, 0, 0.0, 0.0, 0.0, 0.25]])
                     
                     linear_vel = np.linalg.norm([self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z])
                     angular_vel = np.linalg.norm([self.odom.twist.twist.angular.x, self.odom.twist.twist.angular.y, self.odom.twist.twist.angular.z])
                     tag_dist = np.linalg.norm([base_link_to_tag.transform.translation.x, base_link_to_tag.transform.translation.y, base_link_to_tag.transform.translation.z])
 
                     observation_noise *= self.get_parameter('~linear_vel_scale').value * linear_vel *\
-                                         self.get_parameter('~angular_vel_scale').value * angular_vel *\
+                                         angular_vel ** self.get_parameter('~angular_vel_scale').value *\
                                          tag_dist ** self.get_parameter('~tag_dist_scale').value
 
                     h_expected = self.state
