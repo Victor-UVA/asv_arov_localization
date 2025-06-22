@@ -20,14 +20,14 @@ class AROV_EKF_Global(Node):
     def __init__(self):
         super().__init__('arov_ekf_global')
         self.declare_parameters(namespace='',parameters=[
-            ('~ros_bag', True),                                                         # Toggle for using bagged data and switching to sending test transforms
+            ('~ros_bag', True),                                                                         # Toggle for using bagged data and switching to sending test transforms
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-            ('~predict_noise', [0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125]),      # Diagonals of the covariance matrix for prediction noise (if there should
-                                                                                        # be non-zero covariance, change where this parameter is used from diag to array)
-            ('~depth_noise', [0.75]),                                                   # Sensor noise values.
-            ('~compass_noise', [0.5]),
-            ('~roll_pitch_noise', [0.125, 0.125]),
-            ('~apriltag_noise', [2.5, 2.5, 2.5, 0.25, 0.25, 0.25, 0.25])
+            ('~predict_noise', [0.25, 0.25, 0.25, 0.0025, 0.0025, 0.0025, 0.0025]),                     # Diagonals of the covariance matrix for prediction noise (if there should
+                                                                                                        # be non-zero covariance, change where this parameter is used from diag to array)
+            ('~depth_noise', [0.75]),                                                                   # Sensor noise values.
+            ('~compass_noise', [0.5, 0.5, 0.5, 0.5]),
+            ('~roll_pitch_noise', [0.125, 0.125, 0.125, 0.125]),
+            ('~apriltag_noise', [1.5, 1.5, 1.5, 0.25, 0.25, 0.25, 0.25])
         ])
 
         self.ros_bag = self.get_parameter('~ros_bag').value
@@ -125,8 +125,8 @@ class AROV_EKF_Global(Node):
     def arov_pose_callback(self, msg: Odometry):
         self.odom = msg
 
-        if self.state is None:
-            return
+        # if self.state is None:
+        #     return
 
         # odom_to_base_link = None
 
@@ -147,29 +147,34 @@ class AROV_EKF_Global(Node):
         #                                           msg.pose.pose.orientation.z,
         #                                           msg.pose.pose.orientation.w])
 
-        #     odom_to_global_rot = Rotation.from_euler('xyz', self.state[3:]).inv() * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-        #                                                                                                 odom_to_base_link.transform.rotation.y,
-        #                                                                                                 odom_to_base_link.transform.rotation.z,
-        #                                                                                                 odom_to_base_link.transform.rotation.w])
+        #     odom_to_global_rot = Rotation.from_quat(self.state[3:]).inv() * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+        #                                                                                         odom_to_base_link.transform.rotation.y,
+        #                                                                                         odom_to_base_link.transform.rotation.z,
+        #                                                                                         odom_to_base_link.transform.rotation.w])
 
         #     odom_position = np.array([msg.pose.pose.position.x,
         #                               msg.pose.pose.position.y,
         #                               msg.pose.pose.position.z])
             
         #     global_depth = odom_to_global_rot.apply(odom_position)[2]
-        #     global_rot = (odom_to_global_rot * msg_orientation).as_euler('xyz')
+        #     global_rot = (odom_to_global_rot * msg_orientation).as_quat()
 
             # self.correct('depth', [False, False, True, False, False, False], np.array([0, 0, global_depth, 0, 0, 0]),
             #              np.array([0, 0, 1, 0, 0, 0]))
             
-            # self.correct('compass', [False, False, False, False, False, True],
-            #              np.array([0, 0, 0, 0, 0, global_rot[2]]),
-            #              np.array([0, 0, 0, 0, 0, 1]))
+            # self.correct('compass', [False, False, False, True, True, True, True],
+            #              np.array([0, 0, 0, *global_rot]),
+            #              np.array([[0, 0, 0, 1, 0, 0, 0],
+            #                        [0, 0, 0, 0, 1, 0, 0],
+            #                        [0, 0, 0, 0, 0, 1, 0],
+            #                        [0, 0, 0, 0, 0, 0, 1]]))
             
-            # self.correct('roll_pitch', [False, False, False, True, True, False],
-            #              np.array([0, 0, 0, global_rot[0], global_rot[1], 0]),
-            #              np.array([[0, 0, 0, 1, 0, 0],
-            #                        [0, 0, 0, 0, 1, 0]]))
+            # self.correct('roll_pitch', [False, False, False, True, True, True, True],
+            #              np.array([0, 0, 0, *global_rot]),
+            #              np.array([[0, 0, 0, 1, 0, 0, 0],
+            #                        [0, 0, 0, 0, 1, 0, 0],
+            #                        [0, 0, 0, 0, 0, 1, 0],
+            #                        [0, 0, 0, 0, 0, 0, 1]]))
 
     def arov_apriltag_detect_callback(self, msg: AprilTagDetectionArray):
         '''
@@ -234,7 +239,7 @@ class AROV_EKF_Global(Node):
                         arov_in_map = TransformStamped()
                         arov_in_map.header.frame_id = 'map'
                         arov_in_map.header.stamp = self.get_clock().now().to_msg()
-                        arov_in_map.child_frame_id = f'{self.arov}/base_link_obs_apriltag'
+                        arov_in_map.child_frame_id = f'{self.arov}/base_link_obs_apriltag:{tag.id}'
 
                         arov_in_map.transform.translation.x = observation[0]
                         arov_in_map.transform.translation.y = observation[1]
@@ -333,23 +338,23 @@ class AROV_EKF_Global(Node):
                                                self.odom_to_base_link_km1.transform.rotation.z,
                                                self.odom_to_base_link_km1.transform.rotation.w]).inv()
             
-            odom_to_map = Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-                                              odom_to_base_link.transform.rotation.y,
-                                              odom_to_base_link.transform.rotation.z,
-                                              odom_to_base_link.transform.rotation.w]) *\
-                          Rotation.from_quat([base_link_to_map.transform.rotation.x,
+            odom_to_map = Rotation.from_quat([base_link_to_map.transform.rotation.x,
                                               base_link_to_map.transform.rotation.y,
                                               base_link_to_map.transform.rotation.z,
-                                              base_link_to_map.transform.rotation.w])
+                                              base_link_to_map.transform.rotation.w]) *\
+                          Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+                                              odom_to_base_link.transform.rotation.y,
+                                              odom_to_base_link.transform.rotation.z,
+                                              odom_to_base_link.transform.rotation.w])
 
-            linear_diff = odom_to_map.apply([odom_to_base_link.transform.translation.x,
-                                             odom_to_base_link.transform.translation.y,
-                                             odom_to_base_link.transform.translation.z]) -\
-                          odom_to_map.apply([self.odom_to_base_link_km1.transform.translation.x,
-                                             self.odom_to_base_link_km1.transform.translation.y,
-                                             self.odom_to_base_link_km1.transform.translation.z])
+            linear_diff = np.array([odom_to_base_link.transform.translation.x,
+                                    odom_to_base_link.transform.translation.y,
+                                    odom_to_base_link.transform.translation.z]) -\
+                          np.array([self.odom_to_base_link_km1.transform.translation.x,
+                                    self.odom_to_base_link_km1.transform.translation.y,
+                                    self.odom_to_base_link_km1.transform.translation.z])
             
-            self.state[:3] += linear_diff
+            self.state[:3] += odom_to_map.inv().apply(linear_diff)
             self.state[3:] = (angular_diff * Rotation.from_quat(self.state[3:])).as_quat()
 
             # Normalize quaternion
