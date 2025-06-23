@@ -153,35 +153,35 @@ class AROV_EKF_Global(Node):
                                             [base_link_to_tag.transform.rotation.w],
                                             [base_link_to_tag.transform.rotation.x],
                                             [base_link_to_tag.transform.rotation.y],
-                                            [base_link_to_tag.transform.rotation.z]], dtype=float)
+                                            [base_link_to_tag.transform.rotation.z]])
                     
                     diff = np.array([map_to_tag.transform.translation.x - self.state[0],
                                      map_to_tag.transform.translation.y - self.state[1],
-                                     map_to_tag.transform.translation.z - self.state[2]], dtype=float)
+                                     map_to_tag.transform.translation.z - self.state[2]])
 
-                    h_expected = np.array([[diff[0] * (self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[6] ** 2) + 2 * (self.state[3] * -self.state[5] * diff[2] + self.state[5] * self.state[4] * diff[1] + self.state[6] * self.state[4] * diff[2] + self.state[6] * self.state[3] * diff[1])],
-                                           [diff[1] * (self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 - self.state[6] ** 2) + 2 * (self.state[3] * -self.state[6] * diff[0] + self.state[4] * self.state[5] * diff[0] + self.state[6] * self.state[5] * diff[2] + self.state[4] * self.state[3] * diff[2])],
-                                           [diff[2] * (self.state[3] ** 2 - self.state[4] ** 2 - self.state[5] ** 2 + self.state[6] ** 2) + 2 * (self.state[3] * self.state[3] * diff[1] + self.state[5] * self.state[4] * diff[0] + self.state[5] * self.state[6] * diff[1] + self.state[5] * self.state[3] * diff[0])],
+                    h_expected = np.array([[diff[0] * (self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[6] ** 2) + 2 * (-self.state[3] * self.state[5] * diff[2] + self.state[3] * self.state[6] * diff[1] + self.state[4] * self.state[5] * diff[1] + self.state[4] * self.state[6] * diff[2])],
+                                           [diff[1] * (self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 - self.state[6] ** 2) + 2 * (-self.state[3] * self.state[6] * diff[0] + self.state[3] * self.state[4] * diff[2] + self.state[5] * self.state[4] * diff[0] + self.state[5] * self.state[6] * diff[2])],
+                                           [diff[2] * (self.state[3] ** 2 - self.state[4] ** 2 - self.state[5] ** 2 + self.state[6] ** 2) + 2 * (-self.state[3] * self.state[4] * diff[1] + self.state[3] * self.state[5] * diff[0] + self.state[6] * self.state[4] * diff[0] + self.state[6] * self.state[5] * diff[1])],
                                            [self.state[3] * map_to_tag.transform.rotation.w + self.state[4] * map_to_tag.transform.rotation.x + self.state[5] * map_to_tag.transform.rotation.y + self.state[6] * map_to_tag.transform.rotation.z],
-                                           [-self.state[4] * map_to_tag.transform.rotation.w + self.state[3] * map_to_tag.transform.rotation.x - self.state[6] * map_to_tag.transform.rotation.y + self.state[5] * map_to_tag.transform.rotation.z],
-                                           [-self.state[5] * map_to_tag.transform.rotation.w + self.state[6] * map_to_tag.transform.rotation.x + self.state[3] * map_to_tag.transform.rotation.y - self.state[4] * map_to_tag.transform.rotation.z],
-                                           [-self.state[6] * map_to_tag.transform.rotation.w - self.state[5] * map_to_tag.transform.rotation.x + self.state[4] * map_to_tag.transform.rotation.y + self.state[3] * map_to_tag.transform.rotation.z]], dtype=float)
+                                           [-self.state[4] * map_to_tag.transform.rotation.w + self.state[3] * map_to_tag.transform.rotation.x + self.state[6] * map_to_tag.transform.rotation.y - self.state[5] * map_to_tag.transform.rotation.z],
+                                           [-self.state[5] * map_to_tag.transform.rotation.w - self.state[6] * map_to_tag.transform.rotation.x + self.state[3] * map_to_tag.transform.rotation.y + self.state[4] * map_to_tag.transform.rotation.z],
+                                           [-self.state[6] * map_to_tag.transform.rotation.w + self.state[5] * map_to_tag.transform.rotation.x - self.state[4] * map_to_tag.transform.rotation.y + self.state[3] * map_to_tag.transform.rotation.z]])
                                         
                     H_jacobian = np.array([[-self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 + self.state[6] ** 2, 2 * (-self.state[6] * self.state[3] - self.state[4] * self.state[5]), -2 * (-self.state[5] * self.state[3] + self.state[6] * self.state[4]), 2 * (self.state[3] * diff[0] - self.state[5] * diff[2] + self.state[6] * diff[1]), 2 * (-self.state[4] * diff[0] - self.state[5] * diff[1] - self.state[6] * diff[2]), 2 * (self.state[5] * diff[0] - self.state[4] * diff[1] + self.state[3] * diff[2]), 2 * (self.state[6] * diff[0] - self.state[3] * diff[1] - self.state[4] * diff[2])],
                                            [-2 * (-self.state[6] * self.state[3] + self.state[4] * self.state[5]), -self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 + self.state[6] ** 2, 2 * (-self.state[4] * self.state[3] - self.state[4] * self.state[5]), 2 * (-self.state[6] * diff[0] + self.state[3] * diff[1] + self.state[4] * diff[2]), 2 * (-self.state[5] * diff[0] + self.state[4] * diff[1] - self.state[3] * diff[2]), 2 * (-self.state[4] * diff[0] - self.state[5] * diff[1] - self.state[6] * diff[2]), 2 * (self.state[3] * diff[0] + self.state[6] * diff[1] - self.state[5] * diff[2])],
                                            [2 * (-self.state[5] * self.state[3] - self.state[4] * self.state[6]), -2 * (-self.state[4] * self.state[3] + self.state[5] * self.state[6]), -self.state[3] ** 2 + self.state[4] ** 2 + self.state[5] ** 2 - self.state[6] ** 2, 2 * (self.state[5] * diff[0] - self.state[4] * diff[1] + self.state[3] * diff[2]), 2 * (-self.state[6] * diff[0] + self.state[3] * diff[1] + self.state[4] * diff[2]), 2 * (-self.state[3] * diff[0] - self.state[5] * diff[1] + self.state[5] * diff[2]), 2 * (-self.state[4] * diff[0] - self.state[5] * diff[1] - self.state[6] * diff[2])],
                                            [0, 0, 0, map_to_tag.transform.rotation.w, map_to_tag.transform.rotation.x, map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z],
-                                           [0, 0, 0, map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w, map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.y],
-                                           [0, 0, 0, map_to_tag.transform.rotation.y, -map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.w, map_to_tag.transform.rotation.x],
-                                           [0, 0, 0, map_to_tag.transform.rotation.z, map_to_tag.transform.rotation.y, -map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w]], dtype=float)
+                                           [0, 0, 0, map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w, -map_to_tag.transform.rotation.z, map_to_tag.transform.rotation.y],
+                                           [0, 0, 0, map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.w, -map_to_tag.transform.rotation.x],
+                                           [0, 0, 0, map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w]])
                     
-                    observation_noise = 0.01 * np.array([[1.5, 0, 0, 0, 0, 0, 0],
-                                                  [0, 1.5, 0, 0, 0, 0, 0],
-                                                  [0, 0, 1.5, 0, 0, 0, 0],
-                                                  [0, 0, 0, 0.25, 0.0, 0.0, 0.0],
-                                                  [0, 0, 0, 0.0, 0.25, 0.0, 0.0],
-                                                  [0, 0, 0, 0.0, 0.0, 0.25, 0.0],
-                                                  [0, 0, 0, 0.0, 0.0, 0.0, 0.25]], dtype=float)
+                    observation_noise = np.power(np.array([[0.5, 0, 0, 0, 0, 0, 0],
+                                                           [0, 0.5, 0, 0, 0, 0, 0],
+                                                           [0, 0, 0.5, 0, 0, 0, 0],
+                                                           [0, 0, 0, 0.25, 0.0, 0.0, 0.0],
+                                                           [0, 0, 0, 0.0, 0.25, 0.0, 0.0],
+                                                           [0, 0, 0, 0.0, 0.0, 0.25, 0.0],
+                                                           [0, 0, 0, 0.0, 0.0, 0.0, 0.25]]), 2)
                     
                     # linear_vel = np.linalg.norm([self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z])
                     # angular_vel = np.linalg.norm([self.odom.twist.twist.angular.x, self.odom.twist.twist.angular.y, self.odom.twist.twist.angular.z])
@@ -394,6 +394,24 @@ class AROV_EKF_Global(Node):
         
         self.tf_broadcaster.sendTransform(bag_odom)
         self.tf_broadcaster.sendTransform(odom_to_base_link)
+
+        estimate = TransformStamped()
+        estimate.header.stamp = self.get_clock().now().to_msg()
+
+        estimate.header.frame_id = 'map'
+        estimate.child_frame_id = f'{self.arov}_est/base_link'
+
+        estimate.transform.translation.x = self.state[0]
+        estimate.transform.translation.y = self.state[1]
+        estimate.transform.translation.z = self.state[2]
+
+        estimate.transform.rotation.w = self.state[3]
+        estimate.transform.rotation.x = self.state[4]
+        estimate.transform.rotation.y = self.state[5]
+        estimate.transform.rotation.z = self.state[6]
+
+        # self.tf_broadcaster.sendTransform(estimate)
+
 
 
 def main():    
