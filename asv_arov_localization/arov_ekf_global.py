@@ -22,8 +22,8 @@ class AROV_EKF_Global(Node):
         self.declare_parameters(namespace='',parameters=[
             ('~ros_bag', True),                                                     # Toggle for using bagged data and switching to sending test transforms
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-            ('~predict_noise', [0.025, 0.025, 0.025]),                              # Diagonals of the covariance matrix for the linear portion of prediction noise
-            ('~gyro_noise', [0.0025, 0.0025, 0.0025]),                              # Used to compute the angular portion of prediction noise
+            ('~predict_noise', [0.05, 0.05, 0.05]),                                 # Diagonals of the covariance matrix for the linear portion of prediction noise
+            ('~gyro_noise', [0.025, 0.025, 0.025]),                                 # Used to compute the angular portion of prediction noise
             ('~apriltag_noise', [0.75, 0.75, 0.75, 0.025, 0.025, 0.025, 0.025]),
             ('~linear_vel_scale', 2.0),                                             # Scaling factors for AprilTag noise
             ('~angular_vel_scale', 4.0),
@@ -122,8 +122,8 @@ class AROV_EKF_Global(Node):
         '''
         if msg.detections :
             for tag in msg.detections :
-                # if tag.decision_margin < 20.0 :
-                #     continue
+                if tag.decision_margin < 20.0 :
+                    continue
 
                 tag_frame = f'{tag.family}:{tag.id}'
 
@@ -167,7 +167,7 @@ class AROV_EKF_Global(Node):
                                            [-self.state[5] * map_to_tag.transform.rotation.w - self.state[6] * map_to_tag.transform.rotation.x + self.state[3] * map_to_tag.transform.rotation.y + self.state[4] * map_to_tag.transform.rotation.z],
                                            [-self.state[6] * map_to_tag.transform.rotation.w + self.state[5] * map_to_tag.transform.rotation.x - self.state[4] * map_to_tag.transform.rotation.y + self.state[3] * map_to_tag.transform.rotation.z]])
                                         
-                    H_jacobian = np.array([[-(self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[6] ** 2), -2 * (self.state[3] * self.state[6] + self.state[4] * self.state[5]), 2 * (self.state[3] * self.state[5] - self.state[4] * self.state[6]), 2 * (diff[0] * self.state[3] - diff[2] * self.state[5] + diff[1] * self.state[3]), 2 * (diff[0] * self.state[4] + diff[1] * self.state[5] + diff[2] * self.state[6]), 2 * (-diff[0] * self.state[5] - diff[2] * self.state[3] + diff[1] * self.state[4]), 2 * (-diff[0] * self.state[6] + diff[1] * self.state[3] + diff[2] * self.state[4])],
+                    H_jacobian = np.array([[-(self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[6] ** 2), -2 * (self.state[3] * self.state[6] + self.state[4] * self.state[5]), 2 * (self.state[3] * self.state[5] - self.state[4] * self.state[6]), 2 * (diff[0] * self.state[3] - diff[2] * self.state[5] + diff[1] * self.state[6]), 2 * (diff[0] * self.state[4] + diff[1] * self.state[5] + diff[2] * self.state[6]), 2 * (-diff[0] * self.state[5] - diff[2] * self.state[3] + diff[1] * self.state[4]), 2 * (-diff[0] * self.state[6] + diff[1] * self.state[3] + diff[2] * self.state[4])],
                                            [2 * (self.state[3] * self.state[6] - self.state[5] * self.state[4]), -(self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 - self.state[6] ** 2), -2 * (self.state[3] * self.state[4] + self.state[5] * self.state[6]), 2 * (diff[1] * self.state[3] - diff[0] * self.state[6] + diff[2] * self.state[4]), 2 * (-diff[1] * self.state[4] + diff[2] * self.state[3] + diff[0] * self.state[5]), 2 * (diff[1] * self.state[5] + diff[0] * self.state[4] + diff[2] * self.state[6]), 2 * (-diff[1] * self.state[6] - diff[0] * self.state[3] + diff[2] * self.state[5])],
                                            [-2 * (self.state[3] * self.state[5] + self.state[6] * self.state[4]), 2 * (self.state[3] * self.state[4] - self.state[6] * self.state[5]), -(self.state[3] ** 2 - self.state[4] ** 2 - self.state[5] ** 2 + self.state[6] ** 2), 2 * (diff[2] * self.state[3] - diff[1] * self.state[4] + diff[0] * self.state[5]), 2 * (-diff[2] * self.state[4] - diff[1] * self.state[3] + diff[0] * self.state[6]), 2 * (-diff[2] * self.state[5] + diff[0] * self.state[3] + diff[1] * self.state[6]), 2 * (diff[2] * self.state[6] + diff[0] * self.state[4] + diff[1] * self.state[5])],
                                            [0, 0, 0, map_to_tag.transform.rotation.w, map_to_tag.transform.rotation.x, map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z],
@@ -175,13 +175,13 @@ class AROV_EKF_Global(Node):
                                            [0, 0, 0, map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.w, -map_to_tag.transform.rotation.x],
                                            [0, 0, 0, map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w]])
                     
-                    observation_noise = np.power(np.array([[0.5, 0, 0, 0, 0, 0, 0],
-                                                           [0, 0.5, 0, 0, 0, 0, 0],
-                                                           [0, 0, 0.5, 0, 0, 0, 0],
-                                                           [0, 0, 0, 0.25, 0.0, 0.0, 0.0],
-                                                           [0, 0, 0, 0.0, 0.25, 0.0, 0.0],
-                                                           [0, 0, 0, 0.0, 0.0, 0.25, 0.0],
-                                                           [0, 0, 0, 0.0, 0.0, 0.0, 0.25]]), 2)
+                    observation_noise = np.power(np.array([[0.1, 0, 0, 0, 0, 0, 0],
+                                                           [0, 0.1, 0, 0, 0, 0, 0],
+                                                           [0, 0, 0.1, 0, 0, 0, 0],
+                                                           [0, 0, 0, 0.5, 0.0, 0.0, 0.0],
+                                                           [0, 0, 0, 0.0, 0.5, 0.0, 0.0],
+                                                           [0, 0, 0, 0.0, 0.0, 0.5, 0.0],
+                                                           [0, 0, 0, 0.0, 0.0, 0.0, 0.5]]), 2)
                     
                     # linear_vel = np.linalg.norm([self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z])
                     # angular_vel = np.linalg.norm([self.odom.twist.twist.angular.x, self.odom.twist.twist.angular.y, self.odom.twist.twist.angular.z])
