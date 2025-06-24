@@ -1,6 +1,7 @@
 import rclpy
 from rclpy.node import Node
 import numpy as np
+from collections import deque
 
 from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
@@ -70,6 +71,14 @@ class AROV_EKF_Global(Node):
 
         self.predict_timer = self.create_timer(1.0/50.0, self.predict)
         self.pub_timer = self.create_timer(1.0/50.0, self.publish_transform)
+
+        self.tag_data = {}  # id / orientation deque / translation deque / filtered ori deque / filtered tra deque
+        # orientation: sampling rate (ts) = 30Hz, cutoff frequency (wc) = 1Hz
+        self.alpha_or = (1 / 30) / (2 + 1 / 30)  # (ts * wc) / (2 + ts * wc)
+        self.gamma_or = (2 - 1 / 30) / (2 + 1 / 30)  # (2 - ts * wc) / (2 + ts * wc)
+        # translation: sampling rate (ts) = 30Hz, cutoff frequency (wc) = 0.5Hz
+        self.alpha_tr = (0.5 / 30) / (2 + 0.5 / 30)
+        self.gamma_tr = (2 - 0.5 / 30) / (2 + 0.5 / 30)
 
     def publish_transform(self) :
         if self.state is None : return
@@ -412,6 +421,26 @@ class AROV_EKF_Global(Node):
 
         # self.tf_broadcaster.sendTransform(estimate)
 
+    def lowpass_filter(self, id, orientation, translation):
+        ori = np.asarray(orientation, dtype=np.float64)
+        trn = np.asarray(translation, dtype=np.float64)
+        flt_data = self.tag_data[id]    # returns dictionary entry or None
+
+        if flt_data is None:    # create dictionary entry and fill it
+            self.tag_data[id] = {'or': deque([ori.copy()], maxlen=2),
+                                 'tr': deque([trn.copy()], maxlen=2),
+                                 'flt_or': deque([ori.copy], maxlen=2),     # add current orientation cuz data is needed
+                                 'flt_tr': deque([trn.copy()], maxlen=2)}   # add current translation
+            return ori, trn # can't filter yet so return regular data
+
+        flt_data['or'].append(ori)
+        flt_data['tr'].append(trn)
+        # filtered_data(new) = alpha * (data(new) + data(new - 1)) + gamma * filtered_data(new - 1)
+        flt_or = (self.alpha_or * (flt_data['or'][-1] + flt_data['or'][0]) + self.gamma_or * flt_data['flt_or'][0])
+        flt_tr = (self.alpha_tr * (flt_data['tr'][-1] + flt_data['tr'][0]) + self.gamma_tr * flt_data['flt_tr'][0])
+        flt_data['flt_or'].append(flt_or)
+        flt_data['flt_tr'].append(flt_tr)
+        return flt_or, flt_tr
 
 
 def main():    
