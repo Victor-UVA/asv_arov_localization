@@ -91,8 +91,7 @@ class AROV_EKF_Global(Node):
                 f'{self.arov}/base_link',
                 rclpy.time.Time())
             
-        except TransformException as ex :
-            return
+        except TransformException as ex : return
             
 
         if odom_to_base_link is not None :
@@ -156,6 +155,7 @@ class AROV_EKF_Global(Node):
                     continue
                     
                 if base_link_to_tag is not None and map_to_tag is not None :
+                    base_link_to_tag = self.lowpass_filter(tag.id, base_link_to_tag)
                     observation = np.array([[base_link_to_tag.transform.translation.x],
                                             [base_link_to_tag.transform.translation.y],
                                             [base_link_to_tag.transform.translation.z],
@@ -421,26 +421,43 @@ class AROV_EKF_Global(Node):
 
         # self.tf_broadcaster.sendTransform(estimate)
 
-    def lowpass_filter(self, id, orientation, translation):
-        ori = np.asarray(orientation, dtype=np.float64)
-        trn = np.asarray(translation, dtype=np.float64)
+    def lowpass_filter(self, id, transform):
+        translation = np.array([transform.transform.translation.x,
+                                transform.transform.translation.y,
+                                transform.transform.translation.z], dtype=np.float64)
+        orientation = np.array([transform.transform.rotation.x,
+                                transform.transform.rotation.y,
+                                transform.transform.rotation.z,
+                                transform.transform.rotation.w], dtype=np.float64)
         flt_data = self.tag_data[id]    # returns dictionary entry or None
 
         if flt_data is None:    # create dictionary entry and fill it
-            self.tag_data[id] = {'or': deque([ori.copy()], maxlen=2),
-                                 'tr': deque([trn.copy()], maxlen=2),
-                                 'flt_or': deque([ori.copy], maxlen=2),     # add current orientation cuz data is needed
-                                 'flt_tr': deque([trn.copy()], maxlen=2)}   # add current translation
-            return ori, trn # can't filter yet so return regular data
+            self.tag_data[id] = {'or': deque([orientation.copy()], maxlen=2),
+                                 'tr': deque([translation.copy()], maxlen=2),
+                                 'flt_or': deque([orientation.copy], maxlen=2),     # add current orientation cuz data is needed
+                                 'flt_tr': deque([translation.copy()], maxlen=2)}   # add current translation
+            return orientation, translation # can't filter yet so return regular data
 
-        flt_data['or'].append(ori)
-        flt_data['tr'].append(trn)
+        flt_data['tr'].append(translation)
+        flt_data['or'].append(orientation)
         # filtered_data(new) = alpha * (data(new) + data(new - 1)) + gamma * filtered_data(new - 1)
-        flt_or = (self.alpha_or * (flt_data['or'][-1] + flt_data['or'][0]) + self.gamma_or * flt_data['flt_or'][0])
         flt_tr = (self.alpha_tr * (flt_data['tr'][-1] + flt_data['tr'][0]) + self.gamma_tr * flt_data['flt_tr'][0])
-        flt_data['flt_or'].append(flt_or)
+        flt_or = (self.alpha_or * (flt_data['or'][-1] + flt_data['or'][0]) + self.gamma_or * flt_data['flt_or'][0])
+
         flt_data['flt_tr'].append(flt_tr)
-        return flt_or, flt_tr
+        flt_data['flt_or'].append(flt_or)
+
+        filtered_transform = TransformStamped()
+        filtered_transform.header = transform.header
+        filtered_transform.transform.translation.x = flt_tr[0]
+        filtered_transform.transform.translation.y = flt_tr[1]
+        filtered_transform.transform.translation.z = flt_tr[2]
+        filtered_transform.transform.rotation.x = flt_or[0]
+        filtered_transform.transform.rotation.y = flt_or[1]
+        filtered_transform.transform.rotation.z = flt_or[2]
+        filtered_transform.transform.rotation.w = flt_or[3]
+
+        return filtered_transform
 
 
 def main():    
