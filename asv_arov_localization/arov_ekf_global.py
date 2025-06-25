@@ -14,29 +14,32 @@ from tf2_ros.transform_listener import TransformListener
 
 from scipy.spatial.transform import Rotation
 
+
 class AROV_EKF_Global(Node):
     '''
     Node to run global position estimate for the AROV using fixed, known AprilTag locations.
     '''
+
     def __init__(self):
         super().__init__('arov_ekf_global')
-        self.declare_parameters(namespace='',parameters=[
-            ('~ros_bag', True),                                                     # Toggle for using bagged data and switching to sending test transforms
+        self.declare_parameters(namespace='', parameters=[
+            ('~ros_bag', True),  # Toggle for using bagged data and switching to sending test transforms
             ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
-            ('~predict_noise', [0.05, 0.05, 0.05]),                                 # Diagonals of the covariance matrix for the linear portion of prediction noise
-            ('~gyro_noise', [0.025, 0.025, 0.025]),                                 # Used to compute the angular portion of prediction noise
+            ('~predict_noise', [0.05, 0.05, 0.05]),
+            # Diagonals of the covariance matrix for the linear portion of prediction noise
+            ('~gyro_noise', [0.025, 0.025, 0.025]),  # Used to compute the angular portion of prediction noise
             ('~apriltag_noise', [0.75, 0.75, 0.75, 0.025, 0.025, 0.025, 0.025]),
-            ('~linear_vel_scale', 2.0),                                             # Scaling factors for AprilTag noise
+            ('~linear_vel_scale', 2.0),  # Scaling factors for AprilTag noise
             ('~angular_vel_scale', 4.0),
             ('~tag_dist_scale', 3.0)
         ])
 
         self.ros_bag = self.get_parameter('~ros_bag').value
         self.arov = self.get_namespace().strip('/')
-        if self.ros_bag :
+        if self.ros_bag:
             self.odom_frame = f'{self.arov}_bag/odom'
             self.base_link_frame = f'{self.arov}_bag/base_link'
-        else :
+        else:
             self.odom_frame = f'{self.arov}/odom'
             self.base_link_frame = f'{self.arov}/base_link'
 
@@ -66,11 +69,11 @@ class AROV_EKF_Global(Node):
         self.transform.child_frame_id = f'{self.arov}/odom'
 
         self.time_km1 = None
-        self.state = None                                                                       # State estimate: x, y, z, q(w, x, y, z)
-        self.cov = np.diag(self.get_parameter('~initial_cov').value)                            # Covariance estimate
+        self.state = None  # State estimate: x, y, z, q(w, x, y, z)
+        self.cov = np.diag(self.get_parameter('~initial_cov').value)  # Covariance estimate
 
-        self.predict_timer = self.create_timer(1.0/50.0, self.predict)
-        self.pub_timer = self.create_timer(1.0/50.0, self.publish_transform)
+        self.predict_timer = self.create_timer(1.0 / 50.0, self.predict)
+        self.pub_timer = self.create_timer(1.0 / 50.0, self.publish_transform)
 
         self.tag_data = {}  # id / orientation deque / translation deque / filtered ori deque / filtered tra deque
         # orientation: sampling rate (ts) = 30Hz, cutoff frequency (wc) = 1Hz
@@ -80,29 +83,31 @@ class AROV_EKF_Global(Node):
         self.alpha_tr = (0.5 / 30) / (2 + 0.5 / 30)
         self.gamma_tr = (2 - 0.5 / 30) / (2 + 0.5 / 30)
 
-    def publish_transform(self) :
-        if self.state is None : return
+    def publish_transform(self):
+        if self.state is None: return
 
         odom_to_base_link = None
 
-        try :
+        try:
             odom_to_base_link = self.tf_buffer.lookup_transform(
                 f'{self.arov}/odom',
                 f'{self.arov}/base_link',
                 rclpy.time.Time())
-            
-        except TransformException as ex : return
-            
 
-        if odom_to_base_link is not None :
-            orientation = Rotation.from_quat([*self.state[4:], self.state[3]]) * Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-                                                                                                     odom_to_base_link.transform.rotation.y,
-                                                                                                     odom_to_base_link.transform.rotation.z,
-                                                                                                     odom_to_base_link.transform.rotation.w]).inv()
-            
+        except TransformException as ex:
+            return
+
+        if odom_to_base_link is not None:
+            orientation = Rotation.from_quat([*self.state[4:], self.state[3]]) * Rotation.from_quat(
+                [odom_to_base_link.transform.rotation.x,
+                 odom_to_base_link.transform.rotation.y,
+                 odom_to_base_link.transform.rotation.z,
+                 odom_to_base_link.transform.rotation.w]).inv()
+
             translation = self.state[:3] - orientation.apply(np.array([odom_to_base_link.transform.translation.x,
                                                                        odom_to_base_link.transform.translation.y,
-                                                                       odom_to_base_link.transform.translation.z]), False)
+                                                                       odom_to_base_link.transform.translation.z]),
+                                                             False)
 
             orientation = orientation.as_quat()
 
@@ -115,9 +120,9 @@ class AROV_EKF_Global(Node):
             self.transform.transform.rotation.z = orientation[2]
             self.transform.transform.rotation.w = orientation[3]
 
-            if not self.ros_bag :
+            if not self.ros_bag:
                 self.tf_broadcaster.sendTransform(self.transform)
-            else :
+            else:
                 self.bag_testing(odom_to_base_link)
 
     def arov_pose_callback(self, msg: Odometry):
@@ -128,33 +133,33 @@ class AROV_EKF_Global(Node):
         Runs full state correction using AprilTag detections whenever one or more AprilTags are observed.  Assumes a map of true AprilTag transforms
         is provided (can be static or dynamic).
         '''
-        if msg.detections :
-            for tag in msg.detections :
-                if tag.decision_margin < 20.0 :
+        if msg.detections:
+            for tag in msg.detections:
+                if tag.decision_margin < 20.0:
                     continue
 
                 tag_frame = f'{tag.family}:{tag.id}'
 
                 base_link_to_tag = None
                 map_to_tag = None
-                
-                try :
+
+                try:
                     base_link_to_tag = self.tf_buffer.lookup_transform(
                         f'{self.arov}/base_link',
                         tag_frame,
                         rclpy.time.Time())
-                except TransformException as ex :
+                except TransformException as ex:
                     continue
 
-                try :
+                try:
                     map_to_tag = self.tf_buffer.lookup_transform(
                         'map',
                         f'{tag_frame}_true',
                         rclpy.time.Time())
-                except TransformException as ex :
+                except TransformException as ex:
                     continue
-                    
-                if base_link_to_tag is not None and map_to_tag is not None :
+
+                if base_link_to_tag is not None and map_to_tag is not None:
                     base_link_to_tag = self.lowpass_filter(tag.id, base_link_to_tag)
                     observation = np.array([[base_link_to_tag.transform.translation.x],
                                             [base_link_to_tag.transform.translation.y],
@@ -163,27 +168,88 @@ class AROV_EKF_Global(Node):
                                             [base_link_to_tag.transform.rotation.x],
                                             [base_link_to_tag.transform.rotation.y],
                                             [base_link_to_tag.transform.rotation.z]])
-                    
+
                     diff = np.array([map_to_tag.transform.translation.x - self.state[0],
                                      map_to_tag.transform.translation.y - self.state[1],
                                      map_to_tag.transform.translation.z - self.state[2]])
 
-                    h_expected = np.array([[diff[0] * (self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[6] ** 2) + 2 * (-self.state[3] * self.state[5] * diff[2] + self.state[3] * self.state[6] * diff[1] + self.state[4] * self.state[5] * diff[1] + self.state[4] * self.state[6] * diff[2])],
-                                           [diff[1] * (self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 - self.state[6] ** 2) + 2 * (-self.state[3] * self.state[6] * diff[0] + self.state[3] * self.state[4] * diff[2] + self.state[5] * self.state[4] * diff[0] + self.state[5] * self.state[6] * diff[2])],
-                                           [diff[2] * (self.state[3] ** 2 - self.state[4] ** 2 - self.state[5] ** 2 + self.state[6] ** 2) + 2 * (-self.state[3] * self.state[4] * diff[1] + self.state[3] * self.state[5] * diff[0] + self.state[6] * self.state[4] * diff[0] + self.state[6] * self.state[5] * diff[1])],
-                                           [self.state[3] * map_to_tag.transform.rotation.w + self.state[4] * map_to_tag.transform.rotation.x + self.state[5] * map_to_tag.transform.rotation.y + self.state[6] * map_to_tag.transform.rotation.z],
-                                           [-self.state[4] * map_to_tag.transform.rotation.w + self.state[3] * map_to_tag.transform.rotation.x + self.state[6] * map_to_tag.transform.rotation.y - self.state[5] * map_to_tag.transform.rotation.z],
-                                           [-self.state[5] * map_to_tag.transform.rotation.w - self.state[6] * map_to_tag.transform.rotation.x + self.state[3] * map_to_tag.transform.rotation.y + self.state[4] * map_to_tag.transform.rotation.z],
-                                           [-self.state[6] * map_to_tag.transform.rotation.w + self.state[5] * map_to_tag.transform.rotation.x - self.state[4] * map_to_tag.transform.rotation.y + self.state[3] * map_to_tag.transform.rotation.z]])
-                                        
-                    H_jacobian = np.array([[-(self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[6] ** 2), -2 * (self.state[3] * self.state[6] + self.state[4] * self.state[5]), 2 * (self.state[3] * self.state[5] - self.state[4] * self.state[6]), 2 * (diff[0] * self.state[3] - diff[2] * self.state[5] + diff[1] * self.state[6]), 2 * (diff[0] * self.state[4] + diff[1] * self.state[5] + diff[2] * self.state[6]), 2 * (-diff[0] * self.state[5] - diff[2] * self.state[3] + diff[1] * self.state[4]), 2 * (-diff[0] * self.state[6] + diff[1] * self.state[3] + diff[2] * self.state[4])],
-                                           [2 * (self.state[3] * self.state[6] - self.state[5] * self.state[4]), -(self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 - self.state[6] ** 2), -2 * (self.state[3] * self.state[4] + self.state[5] * self.state[6]), 2 * (diff[1] * self.state[3] - diff[0] * self.state[6] + diff[2] * self.state[4]), 2 * (-diff[1] * self.state[4] + diff[2] * self.state[3] + diff[0] * self.state[5]), 2 * (diff[1] * self.state[5] + diff[0] * self.state[4] + diff[2] * self.state[6]), 2 * (-diff[1] * self.state[6] - diff[0] * self.state[3] + diff[2] * self.state[5])],
-                                           [-2 * (self.state[3] * self.state[5] + self.state[6] * self.state[4]), 2 * (self.state[3] * self.state[4] - self.state[6] * self.state[5]), -(self.state[3] ** 2 - self.state[4] ** 2 - self.state[5] ** 2 + self.state[6] ** 2), 2 * (diff[2] * self.state[3] - diff[1] * self.state[4] + diff[0] * self.state[5]), 2 * (-diff[2] * self.state[4] - diff[1] * self.state[3] + diff[0] * self.state[6]), 2 * (-diff[2] * self.state[5] + diff[0] * self.state[3] + diff[1] * self.state[6]), 2 * (diff[2] * self.state[6] + diff[0] * self.state[4] + diff[1] * self.state[5])],
-                                           [0, 0, 0, map_to_tag.transform.rotation.w, map_to_tag.transform.rotation.x, map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z],
-                                           [0, 0, 0, map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w, -map_to_tag.transform.rotation.z, map_to_tag.transform.rotation.y],
-                                           [0, 0, 0, map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.w, -map_to_tag.transform.rotation.x],
-                                           [0, 0, 0, map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w]])
-                    
+                    h_expected = np.array([[diff[0] * (
+                                self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[
+                            6] ** 2) + 2 * (-self.state[3] * self.state[5] * diff[2] + self.state[3] * self.state[6] *
+                                            diff[1] + self.state[4] * self.state[5] * diff[1] + self.state[4] *
+                                            self.state[6] * diff[2])],
+                                           [diff[1] * (self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 -
+                                                       self.state[6] ** 2) + 2 * (
+                                                        -self.state[3] * self.state[6] * diff[0] + self.state[3] *
+                                                        self.state[4] * diff[2] + self.state[5] * self.state[4] * diff[
+                                                            0] + self.state[5] * self.state[6] * diff[2])],
+                                           [diff[2] * (self.state[3] ** 2 - self.state[4] ** 2 - self.state[5] ** 2 +
+                                                       self.state[6] ** 2) + 2 * (
+                                                        -self.state[3] * self.state[4] * diff[1] + self.state[3] *
+                                                        self.state[5] * diff[0] + self.state[6] * self.state[4] * diff[
+                                                            0] + self.state[6] * self.state[5] * diff[1])],
+                                           [self.state[3] * map_to_tag.transform.rotation.w + self.state[
+                                               4] * map_to_tag.transform.rotation.x + self.state[
+                                                5] * map_to_tag.transform.rotation.y + self.state[
+                                                6] * map_to_tag.transform.rotation.z],
+                                           [-self.state[4] * map_to_tag.transform.rotation.w + self.state[
+                                               3] * map_to_tag.transform.rotation.x + self.state[
+                                                6] * map_to_tag.transform.rotation.y - self.state[
+                                                5] * map_to_tag.transform.rotation.z],
+                                           [-self.state[5] * map_to_tag.transform.rotation.w - self.state[
+                                               6] * map_to_tag.transform.rotation.x + self.state[
+                                                3] * map_to_tag.transform.rotation.y + self.state[
+                                                4] * map_to_tag.transform.rotation.z],
+                                           [-self.state[6] * map_to_tag.transform.rotation.w + self.state[
+                                               5] * map_to_tag.transform.rotation.x - self.state[
+                                                4] * map_to_tag.transform.rotation.y + self.state[
+                                                3] * map_to_tag.transform.rotation.z]])
+
+                    H_jacobian = np.array([[-(
+                                self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[6] ** 2),
+                                            -2 * (self.state[3] * self.state[6] + self.state[4] * self.state[5]),
+                                            2 * (self.state[3] * self.state[5] - self.state[4] * self.state[6]), 2 * (
+                                                        diff[0] * self.state[3] - diff[2] * self.state[5] + diff[1] *
+                                                        self.state[6]), 2 * (
+                                                        diff[0] * self.state[4] + diff[1] * self.state[5] + diff[2] *
+                                                        self.state[6]), 2 * (
+                                                        -diff[0] * self.state[5] - diff[2] * self.state[3] + diff[1] *
+                                                        self.state[4]), 2 * (
+                                                        -diff[0] * self.state[6] + diff[1] * self.state[3] + diff[2] *
+                                                        self.state[4])],
+                                           [2 * (self.state[3] * self.state[6] - self.state[5] * self.state[4]), -(
+                                                       self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 -
+                                                       self.state[6] ** 2),
+                                            -2 * (self.state[3] * self.state[4] + self.state[5] * self.state[6]), 2 * (
+                                                        diff[1] * self.state[3] - diff[0] * self.state[6] + diff[2] *
+                                                        self.state[4]), 2 * (
+                                                        -diff[1] * self.state[4] + diff[2] * self.state[3] + diff[0] *
+                                                        self.state[5]), 2 * (
+                                                        diff[1] * self.state[5] + diff[0] * self.state[4] + diff[2] *
+                                                        self.state[6]), 2 * (
+                                                        -diff[1] * self.state[6] - diff[0] * self.state[3] + diff[2] *
+                                                        self.state[5])],
+                                           [-2 * (self.state[3] * self.state[5] + self.state[6] * self.state[4]),
+                                            2 * (self.state[3] * self.state[4] - self.state[6] * self.state[5]), -(
+                                                       self.state[3] ** 2 - self.state[4] ** 2 - self.state[5] ** 2 +
+                                                       self.state[6] ** 2), 2 * (
+                                                        diff[2] * self.state[3] - diff[1] * self.state[4] + diff[0] *
+                                                        self.state[5]), 2 * (
+                                                        -diff[2] * self.state[4] - diff[1] * self.state[3] + diff[0] *
+                                                        self.state[6]), 2 * (
+                                                        -diff[2] * self.state[5] + diff[0] * self.state[3] + diff[1] *
+                                                        self.state[6]), 2 * (
+                                                        diff[2] * self.state[6] + diff[0] * self.state[4] + diff[1] *
+                                                        self.state[5])],
+                                           [0, 0, 0, map_to_tag.transform.rotation.w, map_to_tag.transform.rotation.x,
+                                            map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z],
+                                           [0, 0, 0, map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w,
+                                            -map_to_tag.transform.rotation.z, map_to_tag.transform.rotation.y],
+                                           [0, 0, 0, map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z,
+                                            -map_to_tag.transform.rotation.w, -map_to_tag.transform.rotation.x],
+                                           [0, 0, 0, map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.y,
+                                            map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w]])
+
                     observation_noise = np.power(np.array([[0.1, 0, 0, 0, 0, 0, 0],
                                                            [0, 0.1, 0, 0, 0, 0, 0],
                                                            [0, 0, 0.1, 0, 0, 0, 0],
@@ -191,7 +257,7 @@ class AROV_EKF_Global(Node):
                                                            [0, 0, 0, 0.0, 0.5, 0.0, 0.0],
                                                            [0, 0, 0, 0.0, 0.0, 0.5, 0.0],
                                                            [0, 0, 0, 0.0, 0.0, 0.0, 0.5]]), 2)
-                    
+
                     # linear_vel = np.linalg.norm([self.odom.twist.twist.linear.x, self.odom.twist.twist.linear.y, self.odom.twist.twist.linear.z])
                     # angular_vel = np.linalg.norm([self.odom.twist.twist.angular.x, self.odom.twist.twist.angular.y, self.odom.twist.twist.angular.z])
                     # tag_dist = np.linalg.norm([base_link_to_tag.transform.translation.x, base_link_to_tag.transform.translation.y, base_link_to_tag.transform.translation.z])
@@ -206,20 +272,20 @@ class AROV_EKF_Global(Node):
 
                     if self.ros_bag:
                         observed_orientation = Rotation.from_quat([map_to_tag.transform.rotation.x,
-                                                               map_to_tag.transform.rotation.y,
-                                                               map_to_tag.transform.rotation.z,
-                                                               map_to_tag.transform.rotation.w]) *\
-                                           Rotation.from_quat([base_link_to_tag.transform.rotation.x,
-                                                               base_link_to_tag.transform.rotation.y,
-                                                               base_link_to_tag.transform.rotation.z,
-                                                               base_link_to_tag.transform.rotation.w]).inv()
-                    
+                                                                   map_to_tag.transform.rotation.y,
+                                                                   map_to_tag.transform.rotation.z,
+                                                                   map_to_tag.transform.rotation.w]) * \
+                                               Rotation.from_quat([base_link_to_tag.transform.rotation.x,
+                                                                   base_link_to_tag.transform.rotation.y,
+                                                                   base_link_to_tag.transform.rotation.z,
+                                                                   base_link_to_tag.transform.rotation.w]).inv()
+
                         tag_in_map = observed_orientation.apply(np.array([base_link_to_tag.transform.translation.x,
-                                                                        base_link_to_tag.transform.translation.y, 
-                                                                        base_link_to_tag.transform.translation.z]))
-                        
+                                                                          base_link_to_tag.transform.translation.y,
+                                                                          base_link_to_tag.transform.translation.z]))
+
                         observed_orientation = observed_orientation.as_quat()
-                        
+
                         # observation = np.array([map_to_tag.transform.translation.x - tag_in_map[0],
                         #                         map_to_tag.transform.translation.y - tag_in_map[1],
                         #                         map_to_tag.transform.translation.z - tag_in_map[2],
@@ -229,7 +295,7 @@ class AROV_EKF_Global(Node):
                         #                         observed_orientation[2]])
 
                         observation = h_expected
-                        
+
                         arov_in_map = TransformStamped()
                         arov_in_map.header.frame_id = f'{self.arov}_bag/base_link'
                         arov_in_map.header.stamp = self.get_clock().now().to_msg()
@@ -244,14 +310,14 @@ class AROV_EKF_Global(Node):
                         arov_in_map.transform.rotation.w = observation[3][0]
 
                         self.tf_broadcaster.sendTransform(arov_in_map)
-                        
-                        try :
+
+                        try:
                             base_link_to_tag = self.tf_buffer.lookup_transform(
                                 f'{self.arov}/base_link',
                                 tag_frame,
                                 rclpy.time.Time())
-                            
-                        except TransformException as ex :
+
+                        except TransformException as ex:
                             continue
 
                         base_link_to_tag.header.frame_id = f'{self.arov}_bag/base_link'
@@ -261,24 +327,23 @@ class AROV_EKF_Global(Node):
 
                         self.tf_broadcaster.sendTransform(base_link_to_tag)
 
-
     def predict(self):
         '''
         Propogate forward the position estimate and convariance.
         '''
-        if self.state is None or self.odom is None :
+        if self.state is None or self.odom is None:
             odom_to_base_link = None
 
-            try :
+            try:
                 odom_to_base_link = self.tf_buffer.lookup_transform(
                     f'{self.arov}/odom',
                     f'{self.arov}/base_link',
                     rclpy.time.Time())
-                
-            except TransformException as ex :
+
+            except TransformException as ex:
                 return
 
-            if odom_to_base_link is not None :
+            if odom_to_base_link is not None:
                 self.state = np.array([odom_to_base_link.transform.translation.x,
                                        odom_to_base_link.transform.translation.y,
                                        odom_to_base_link.transform.translation.z,
@@ -286,42 +351,42 @@ class AROV_EKF_Global(Node):
                                        odom_to_base_link.transform.rotation.x,
                                        odom_to_base_link.transform.rotation.y,
                                        odom_to_base_link.transform.rotation.z])
-                
+
                 self.time_km1 = self.get_clock().now()
                 self.odom_to_base_link_km1 = odom_to_base_link
             return
-        
+
         base_link_to_map = None
         odom_to_base_link = None
 
-        try :
+        try:
             base_link_to_map = self.tf_buffer.lookup_transform(
                 self.base_link_frame,
                 'map',
                 rclpy.time.Time())
-            
-        except TransformException as ex :
+
+        except TransformException as ex:
             return
-        
-        try :
+
+        try:
             odom_to_base_link = self.tf_buffer.lookup_transform(
                 self.odom_frame,
                 self.base_link_frame,
                 rclpy.time.Time())
-            
-        except TransformException as ex :
+
+        except TransformException as ex:
             return
-        
-        if base_link_to_map is not None and odom_to_base_link is not None :
+
+        if base_link_to_map is not None and odom_to_base_link is not None:
             time_k = self.get_clock().now()
-            dt =  (time_k - self.time_km1).nanoseconds / 10.0**9                                # Time since last prediction
+            dt = (time_k - self.time_km1).nanoseconds / 10.0 ** 9  # Time since last prediction
             self.time_km1 = time_k
-            
+
             # Linear prediction
             odom_to_map = Rotation.from_quat([base_link_to_map.transform.rotation.x,
                                               base_link_to_map.transform.rotation.y,
                                               base_link_to_map.transform.rotation.z,
-                                              base_link_to_map.transform.rotation.w]) *\
+                                              base_link_to_map.transform.rotation.w]) * \
                           Rotation.from_quat([odom_to_base_link.transform.rotation.x,
                                               odom_to_base_link.transform.rotation.y,
                                               odom_to_base_link.transform.rotation.z,
@@ -329,23 +394,23 @@ class AROV_EKF_Global(Node):
 
             linear_diff = np.array([odom_to_base_link.transform.translation.x,
                                     odom_to_base_link.transform.translation.y,
-                                    odom_to_base_link.transform.translation.z]) -\
+                                    odom_to_base_link.transform.translation.z]) - \
                           np.array([self.odom_to_base_link_km1.transform.translation.x,
                                     self.odom_to_base_link_km1.transform.translation.y,
                                     self.odom_to_base_link_km1.transform.translation.z])
-            
+
             # Angular prediction
             angular_diff = Rotation.from_quat([odom_to_base_link.transform.rotation.x,
                                                odom_to_base_link.transform.rotation.y,
                                                odom_to_base_link.transform.rotation.z,
-                                               odom_to_base_link.transform.rotation.w]) *\
+                                               odom_to_base_link.transform.rotation.w]) * \
                            Rotation.from_quat([self.odom_to_base_link_km1.transform.rotation.x,
                                                self.odom_to_base_link_km1.transform.rotation.y,
                                                self.odom_to_base_link_km1.transform.rotation.z,
                                                self.odom_to_base_link_km1.transform.rotation.w]).inv()
-            
+
             angular_prediction = (angular_diff * Rotation.from_quat([*self.state[4:], self.state[3]])).as_quat()
-            
+
             self.state[:3] += odom_to_map.inv().apply(linear_diff)
             self.state[3:] = [angular_prediction[3], *angular_prediction[:3]]
 
@@ -355,22 +420,23 @@ class AROV_EKF_Global(Node):
             self.odom_to_base_link_km1 = odom_to_base_link
 
             F = np.diag([1, 1, 1, 1, 1, 1, 1])
-            
+
             linear_noise = dt * np.power(np.diag(self.get_parameter('~predict_noise').value), 2)
-            
-            W_k = (dt/2) * np.array([[-self.state[4], -self.state[5], -self.state[6]],
-                                     [self.state[3], -self.state[6], self.state[5]],
-                                     [self.state[6], self.state[3], -self.state[4]],
-                                     [-self.state[5], self.state[4], self.state[3]]])
+
+            W_k = (dt / 2) * np.array([[-self.state[4], -self.state[5], -self.state[6]],
+                                       [self.state[3], -self.state[6], self.state[5]],
+                                       [self.state[6], self.state[3], -self.state[4]],
+                                       [-self.state[5], self.state[4], self.state[3]]])
             angular_noise = W_k @ np.power(np.diag(self.get_parameter('~gyro_noise').value), 2) @ W_k.transpose()
 
             predict_noise = np.zeros((7, 7))
             predict_noise[:3, :3] = linear_noise
             predict_noise[3:, 3:] = angular_noise
-            
+
             self.cov = F @ self.cov @ F.transpose() + (predict_noise)
 
-    def correct(self, observation: np.ndarray, observation_noise: np.ndarray, h_expected: np.ndarray, H_jacobian: np.ndarray):
+    def correct(self, observation: np.ndarray, observation_noise: np.ndarray, h_expected: np.ndarray,
+                H_jacobian: np.ndarray):
         '''
         Generic correction for a state to run whenever an observation comes in.
 
@@ -400,7 +466,7 @@ class AROV_EKF_Global(Node):
         odom_to_base_link.child_frame_id = f'{self.arov}_bag/base_link'
 
         odom_to_base_link.header.stamp = self.get_clock().now().to_msg()
-        
+
         self.tf_broadcaster.sendTransform(bag_odom)
         self.tf_broadcaster.sendTransform(odom_to_base_link)
 
@@ -429,14 +495,15 @@ class AROV_EKF_Global(Node):
                                 transform.transform.rotation.y,
                                 transform.transform.rotation.z,
                                 transform.transform.rotation.w], dtype=np.float64)
-        flt_data = self.tag_data[id]    # returns dictionary entry or None
+        flt_data = self.tag_data[id]  # returns dictionary entry or None
 
-        if flt_data is None:    # create dictionary entry and fill it
+        if flt_data is None:  # create dictionary entry and fill it
             self.tag_data[id] = {'or': deque([orientation.copy()], maxlen=2),
                                  'tr': deque([translation.copy()], maxlen=2),
-                                 'flt_or': deque([orientation.copy], maxlen=2),     # add current orientation cuz data is needed
-                                 'flt_tr': deque([translation.copy()], maxlen=2)}   # add current translation
-            return orientation, translation # can't filter yet so return regular data
+                                 'flt_or': deque([orientation.copy], maxlen=2),
+                                 # add current orientation cuz data is needed
+                                 'flt_tr': deque([translation.copy()], maxlen=2)}  # add current translation
+            return orientation, translation  # can't filter yet so return regular data
 
         flt_data['tr'].append(translation)
         flt_data['or'].append(orientation)
@@ -459,8 +526,7 @@ class AROV_EKF_Global(Node):
 
         return filtered_transform
 
-
-def main():    
+def main():
     rclpy.init()
 
     arov_ekf_global = AROV_EKF_Global()
@@ -469,6 +535,7 @@ def main():
 
     arov_ekf_global.destroy_node()
     rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()
