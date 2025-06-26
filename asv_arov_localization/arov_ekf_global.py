@@ -76,12 +76,12 @@ class AROV_EKF_Global(Node):
         self.pub_timer = self.create_timer(1.0 / 50.0, self.publish_transform)
 
         self.tag_data = {}  # id / translation / orientation / filtered translation / filtered orientation
-        quat_f0 = 0.05
         pose_f0 = 0.1
         Fs = 25
-        self.quat_alpha = 1 - math.exp(-2 * math.pi * quat_f0 / Fs)
         pose_alpha = 1 - math.exp(-2 * math.pi * pose_f0/ Fs)
         self.pose_coeffs = [[1.2*pose_alpha, -0.2*pose_alpha], [1.0, pose_alpha-1]]
+        self.base_quat_alpha = 0.1
+        self.quat_sens = 0.5
 
     def publish_transform(self):
         if self.state is None: return
@@ -510,12 +510,18 @@ class AROV_EKF_Global(Node):
 
         flt_data = self.tag_data[id]
         flt_data['pose'].append(translation)
+        if np.dot(orientation, flt_data['quat'][0]) < 0.0:  # test for quaternion flip
+            orientation = -orientation
         flt_data['quat'].append(orientation)
-        # Difference equation filter for pose
+
+        # Difference eq LPF for pose
         flt_pose = self.pose_coeffs[0][0] * flt_data['pose'][1] + self.pose_coeffs[0][1] * flt_data['pose'][0] - self.pose_coeffs[1][1] * flt_data['flt_pose'][0]
         flt_data['flt_pose'].append(flt_pose)
-        # EMA filter for quaternion
-        flt_quat = self.quat_alpha * flt_data['quat'][1] + (1-self.quat_alpha) * flt_data['flt_quat'][0]
+
+        # Adaptive LPF for quaternion
+        quat_alpha = self.base_quat_alpha * (1 + self.quat_sens * 2 * np.arccos(np.abs(np.dot(flt_data['quat'][1], flt_data['quat'][0]))))
+        quat_alpha = np.clip(quat_alpha, 0.05, 0.5)
+        flt_quat = quat_alpha * flt_data['quat'][1] + (1-quat_alpha) * flt_data['flt_quat'][0]
         flt_quat /= np.linalg.norm(flt_data['flt_quat'])
         flt_data['flt_quat'].append(flt_quat)
 
