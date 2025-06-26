@@ -74,13 +74,9 @@ class AROV_EKF_Global(Node):
         self.predict_timer = self.create_timer(1.0 / 50.0, self.predict)
         self.pub_timer = self.create_timer(1.0 / 50.0, self.publish_transform)
 
-        self.tag_data = {}  # id / orientation deque / translation deque / filtered ori deque / filtered tra deque
-        # orientation: sampling rate (ts) = 30Hz, cutoff frequency (wc) = 1Hz
-        self.alpha_or = (1 / 30) / (2 + 1 / 30)  # (ts * wc) / (2 + ts * wc)
-        self.gamma_or = (2 - 1 / 30) / (2 + 1 / 30)  # (2 - ts * wc) / (2 + ts * wc)
-        # translation: sampling rate (ts) = 30Hz, cutoff frequency (wc) = 0.5Hz
-        self.alpha_tr = (0.5 / 30) / (2 + 0.5 / 30)
-        self.gamma_tr = (2 - 0.5 / 30) / (2 + 0.5 / 30)
+        self.tag_data = {}  # id / translation / orientation / filtered translation / filtered orientation
+        self.or_coeffs = self._get_lpf_coeffs(0.1, 0.7071)  # Q: butter = 0.7071, cheby I (1db rip) = 0.9565, bessel = 0.5773
+        self.tr_coeffs = self._get_lpf_coeffs(0.1, 0.7071)
 
     def publish_transform(self):
         if self.state is None: return
@@ -308,6 +304,11 @@ class AROV_EKF_Global(Node):
                         arov_in_map.transform.rotation.z = observation[6][0]
                         arov_in_map.transform.rotation.w = observation[3][0]
 
+                        arov_in_map = base_link_to_tag
+                        arov_in_map.header.frame_id = f'{self.arov}_bag/base_link'
+                        arov_in_map.header.stamp = self.get_clock().now().to_msg()
+                        arov_in_map.child_frame_id = f'{self.arov}/base_link_obs_apriltag:{tag.id}'
+
                         self.tf_broadcaster.sendTransform(arov_in_map)
 
                         try:
@@ -494,36 +495,59 @@ class AROV_EKF_Global(Node):
                                 transform.transform.rotation.y,
                                 transform.transform.rotation.z,
                                 transform.transform.rotation.w], dtype=np.float64)
+
+        if id not in self.tag_data:  # create dictionary entry and fill it
+            self.tag_data[id] = {'tr': deque([translation.copy() for _ in range(2)], maxlen=3), # populate with current translation twice, append third on next go
+                                 'or': deque([orientation.copy() for _ in range(2)], maxlen=3), # populate with current orientation twice, append third on next go
+                                 'flt_tr': deque([translation.copy() for _ in range(2)], maxlen=3), # same, append with filtered data on next go
+                                 'flt_or': deque([orientation.copy() for _ in range(2)], maxlen=3)} # same, append with filtered data on next go
+            return transform  # can't filter yet so return regular data
+
         flt_data = self.tag_data[id]  # returns dictionary entry or None
-
-        if flt_data is None:  # create dictionary entry and fill it
-            self.tag_data[id] = {'or': deque([orientation.copy()], maxlen=2),
-                                 'tr': deque([translation.copy()], maxlen=2),
-                                 'flt_or': deque([orientation.copy], maxlen=2),
-                                 # add current orientation cuz data is needed
-                                 'flt_tr': deque([translation.copy()], maxlen=2)}  # add current translation
-            return orientation, translation  # can't filter yet so return regular data
-
         flt_data['tr'].append(translation)
         flt_data['or'].append(orientation)
-        # filtered_data(new) = alpha * (data(new) + data(new - 1)) + gamma * filtered_data(new - 1)
-        flt_tr = (self.alpha_tr * (flt_data['tr'][-1] + flt_data['tr'][0]) + self.gamma_tr * flt_data['flt_tr'][0])
-        flt_or = (self.alpha_or * (flt_data['or'][-1] + flt_data['or'][0]) + self.gamma_or * flt_data['flt_or'][0])
-
+        # H(z) = b0 + b1*z^-1 + b2*z^-2 / a0 + a1*z^-1 + a2*z^-2
+        # a0y[n] = b0x[n] + b1x[n-1] + b2x[n-2] - a1y[n-1] - a2y[n-2]
+        # prenormalized so no need to perform division by a0
+        flt_tr = (self.tr_coeffs[0][0] * flt_data['tr'][2] + self.tr_coeffs[0][1] * flt_data['tr'][1] + self.tr_coeffs[0][2] * flt_data['tr'][0]
+                  - self.tr_coeffs[1][1] * flt_data['flt_tr'][1] - self.tr_coeffs[1][2] * flt_data['flt_tr'][0])
         flt_data['flt_tr'].append(flt_tr)
+
+        flt_or = (self.or_coeffs[0][0] * flt_data['or'][2] + self.or_coeffs[0][1] * flt_data['or'][1] + self.or_coeffs[0][2] * flt_data['or'][0]
+                  - self.or_coeffs[1][1] * flt_data['flt_or'][1] - self.or_coeffs[1][2] * flt_data['flt_or'][0])
+        flt_or /= np.linalg.norm(flt_data['or'])    # normalize the quaternion
         flt_data['flt_or'].append(flt_or)
 
         filtered_transform = TransformStamped()
         filtered_transform.header = transform.header
-        filtered_transform.transform.translation.x = flt_tr[0]
-        filtered_transform.transform.translation.y = flt_tr[1]
-        filtered_transform.transform.translation.z = flt_tr[2]
         filtered_transform.transform.rotation.x = flt_or[0]
         filtered_transform.transform.rotation.y = flt_or[1]
         filtered_transform.transform.rotation.z = flt_or[2]
         filtered_transform.transform.rotation.w = flt_or[3]
+        filtered_transform.transform.translation.x = flt_tr[0]
+        filtered_transform.transform.translation.y = flt_tr[1]
+        filtered_transform.transform.translation.z = flt_tr[2]
 
         return filtered_transform
+
+    def _get_lpf_coeffs(self, f0, Q):
+        # tunable parameters
+        # f0 is cutoff frequency
+        Fs = 30     # sampling frequency
+        # Q is Q factor
+        # Q = (2*sinh(0.5*ln(2)*BW))^-1
+        # intermediate variables
+        w0 = 2 * np.pi * f0 / Fs    # normalized cutoff frequency
+        alpha = np.sin(w0) / (2*Q)
+        a0 = 1 + alpha
+        a1 = -2 * np.cos(w0)
+        a2 = 1 - alpha
+        b0 = (1 - np.cos(w0)) / 2
+        b1 = 2 * b0
+        b2 = b0
+        coeffs = np.array([[b0, b1, b2], [a0, a1, a2]])
+        coeffs /= a0    # normalize so a0 = 1
+        return coeffs
 
 def main():
     rclpy.init()
