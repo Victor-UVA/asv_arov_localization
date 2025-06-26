@@ -1,9 +1,10 @@
 import rclpy
 from rclpy.node import Node
 import numpy as np
+import math
 from collections import deque
 
-from geometry_msgs.msg import TransformStamped
+from geometry_msgs.msg import TransformStamped, Quaternion
 from nav_msgs.msg import Odometry
 from apriltag_msgs.msg import AprilTagDetectionArray
 
@@ -75,8 +76,12 @@ class AROV_EKF_Global(Node):
         self.pub_timer = self.create_timer(1.0 / 50.0, self.publish_transform)
 
         self.tag_data = {}  # id / translation / orientation / filtered translation / filtered orientation
-        self.or_coeffs = self._get_lpf_coeffs(0.1, 0.7071)  # Q: butter = 0.7071, cheby I (1db rip) = 0.9565, bessel = 0.5773
-        self.tr_coeffs = self._get_lpf_coeffs(0.1, 0.7071)
+        quat_f0 = 0.05
+        pose_f0 = 0.1
+        Fs = 25
+        self.quat_alpha = 1 - math.exp(-2 * math.pi * quat_f0 / Fs)
+        pose_alpha = 1 - math.exp(-2 * math.pi * pose_f0/ Fs)
+        self.pose_coeffs = [[1.2*pose_alpha, -0.2*pose_alpha], [1.0, pose_alpha-1]]
 
     def publish_transform(self):
         if self.state is None: return
@@ -497,57 +502,34 @@ class AROV_EKF_Global(Node):
                                 transform.transform.rotation.w], dtype=np.float64)
 
         if id not in self.tag_data:  # create dictionary entry and fill it
-            self.tag_data[id] = {'tr': deque([translation.copy() for _ in range(2)], maxlen=3), # populate with current translation twice, append third on next go
-                                 'or': deque([orientation.copy() for _ in range(2)], maxlen=3), # populate with current orientation twice, append third on next go
-                                 'flt_tr': deque([translation.copy() for _ in range(2)], maxlen=3), # same, append with filtered data on next go
-                                 'flt_or': deque([orientation.copy() for _ in range(2)], maxlen=3)} # same, append with filtered data on next go
-            return transform  # can't filter yet so return regular data
+            self.tag_data[id] = {'pose': deque([translation.copy()], maxlen=2), # populate with current translation once, append second on next go
+                                 'quat': deque([orientation.copy()], maxlen=2), # populate with current orientation once, append second on next go
+                                 'flt_pose': deque([translation.copy()], maxlen=2), # same, append with filtered data on next go
+                                 'flt_quat': deque([orientation.copy()], maxlen=2)} # same, append with filtered data on next go
+            return transform
 
-        flt_data = self.tag_data[id]  # returns dictionary entry or None
-        flt_data['tr'].append(translation)
-        flt_data['or'].append(orientation)
-        # H(z) = b0 + b1*z^-1 + b2*z^-2 / a0 + a1*z^-1 + a2*z^-2
-        # a0y[n] = b0x[n] + b1x[n-1] + b2x[n-2] - a1y[n-1] - a2y[n-2]
-        # prenormalized so no need to perform division by a0
-        flt_tr = (self.tr_coeffs[0][0] * flt_data['tr'][2] + self.tr_coeffs[0][1] * flt_data['tr'][1] + self.tr_coeffs[0][2] * flt_data['tr'][0]
-                  - self.tr_coeffs[1][1] * flt_data['flt_tr'][1] - self.tr_coeffs[1][2] * flt_data['flt_tr'][0])
-        flt_data['flt_tr'].append(flt_tr)
-
-        flt_or = (self.or_coeffs[0][0] * flt_data['or'][2] + self.or_coeffs[0][1] * flt_data['or'][1] + self.or_coeffs[0][2] * flt_data['or'][0]
-                  - self.or_coeffs[1][1] * flt_data['flt_or'][1] - self.or_coeffs[1][2] * flt_data['flt_or'][0])
-        flt_or /= np.linalg.norm(flt_data['or'])    # normalize the quaternion
-        flt_data['flt_or'].append(flt_or)
+        flt_data = self.tag_data[id]
+        flt_data['pose'].append(translation)
+        flt_data['quat'].append(orientation)
+        # Difference equation filter for pose
+        flt_pose = self.pose_coeffs[0][0] * flt_data['pose'][1] + self.pose_coeffs[0][1] * flt_data['pose'][0] - self.pose_coeffs[1][1] * flt_data['flt_pose'][0]
+        flt_data['flt_pose'].append(flt_pose)
+        # EMA filter for quaternion
+        flt_quat = self.quat_alpha * flt_data['quat'][1] + (1-self.quat_alpha) * flt_data['flt_quat'][0]
+        flt_quat /= np.linalg.norm(flt_data['flt_quat'])
+        flt_data['flt_quat'].append(flt_quat)
 
         filtered_transform = TransformStamped()
         filtered_transform.header = transform.header
-        filtered_transform.transform.rotation.x = flt_or[0]
-        filtered_transform.transform.rotation.y = flt_or[1]
-        filtered_transform.transform.rotation.z = flt_or[2]
-        filtered_transform.transform.rotation.w = flt_or[3]
-        filtered_transform.transform.translation.x = flt_tr[0]
-        filtered_transform.transform.translation.y = flt_tr[1]
-        filtered_transform.transform.translation.z = flt_tr[2]
+        filtered_transform.transform.translation.x = flt_pose[0]
+        filtered_transform.transform.translation.y = flt_pose[1]
+        filtered_transform.transform.translation.z = flt_pose[2]
+        filtered_transform.transform.rotation.x = flt_quat[0]
+        filtered_transform.transform.rotation.y = flt_quat[1]
+        filtered_transform.transform.rotation.z = flt_quat[2]
+        filtered_transform.transform.rotation.w = flt_quat[3]
 
         return filtered_transform
-
-    def _get_lpf_coeffs(self, f0, Q):
-        # tunable parameters
-        # f0 is cutoff frequency
-        Fs = 30     # sampling frequency
-        # Q is Q factor
-        # Q = (2*sinh(0.5*ln(2)*BW))^-1
-        # intermediate variables
-        w0 = 2 * np.pi * f0 / Fs    # normalized cutoff frequency
-        alpha = np.sin(w0) / (2*Q)
-        a0 = 1 + alpha
-        a1 = -2 * np.cos(w0)
-        a2 = 1 - alpha
-        b0 = (1 - np.cos(w0)) / 2
-        b1 = 2 * b0
-        b2 = b0
-        coeffs = np.array([[b0, b1, b2], [a0, a1, a2]])
-        coeffs /= a0    # normalize so a0 = 1
-        return coeffs
 
 def main():
     rclpy.init()
