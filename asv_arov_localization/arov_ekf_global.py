@@ -511,7 +511,7 @@ class AROV_EKF_Global(Node):
         flt_data = self.tag_data[id]
         flt_data['pose'].append(translation)
         if np.dot(orientation, flt_data['quat'][0]) < 0.0:  # test for quaternion flip
-            orientation = -orientation
+            orientation *= -1
         flt_data['quat'].append(orientation)
 
         # Difference eq LPF for pose
@@ -519,10 +519,10 @@ class AROV_EKF_Global(Node):
         flt_data['flt_pose'].append(flt_pose)
 
         # Adaptive LPF for quaternion
-        quat_alpha = self.base_quat_alpha * (1 + self.quat_sens * 2 * np.arccos(np.abs(np.dot(flt_data['quat'][1], flt_data['quat'][0]))))
+        quat_alpha = self.base_quat_alpha * (1 + self.quat_sens * 2 * np.arccos(np.clip(np.abs(np.dot(flt_data['quat'][1], flt_data['quat'][0])), -1, 1)))
         quat_alpha = np.clip(quat_alpha, 0.05, 0.5)
         flt_quat = quat_alpha * flt_data['quat'][1] + (1-quat_alpha) * flt_data['flt_quat'][0]
-        flt_quat /= np.linalg.norm(flt_data['flt_quat'])
+        flt_quat /= np.linalg.norm(flt_quat)
         flt_data['flt_quat'].append(flt_quat)
 
         filtered_transform = TransformStamped()
