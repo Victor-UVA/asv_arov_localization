@@ -25,13 +25,14 @@ class AROV_EKF_Global(Node):
         super().__init__('arov_ekf_global')
         self.declare_parameters(namespace='', parameters=[
             ('~ros_bag', True),  # Toggle for using bagged data and switching to sending test transforms
-            ('~initial_cov', [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0]),
+            ('~initial_cov', [5.0, 5.0, 5.0, 2.0, 2.0, 2.0, 2.0]),
             ('~predict_noise', [0.05, 0.05, 0.05]),                                 # Diagonals of the covariance matrix for the linear portion of prediction noise
-            ('~gyro_noise', [0.025, 0.025, 0.025]),                                 # Used to compute the angular portion of prediction noise
+            ('~gyro_noise', [0.05, 0.05, 0.05]),                                    # Used to compute the angular portion of prediction noise
             ('~apriltag_noise', [0.5, 0.5, 0.5, 0.025, 0.025, 0.025, 0.025]),
             ('~linear_vel_scale', 2.0),                                             # Scaling factors for AprilTag noise
             ('~angular_vel_scale', 4.0),
-            ('~tag_dist_scale', 3.0)
+            ('~tag_dist_scale', 3.0),
+            ('~fixed_tag_ids', [4])
         ])
 
         self.ros_bag = self.get_parameter('~ros_bag').value
@@ -71,6 +72,8 @@ class AROV_EKF_Global(Node):
         self.time_km1 = None
         self.state = None  # State estimate: x, y, z, q(w, x, y, z)
         self.cov = np.diag(self.get_parameter('~initial_cov').value)  # Covariance estimate
+        self.known_tag_ids = []
+        self.fixed_tag_ids = self.get_parameter('~fixed_tag_ids').value
 
         self.predict_timer = self.create_timer(1.0 / 50.0, self.predict)
         self.pub_timer = self.create_timer(1.0 / 50.0, self.publish_transform)
@@ -98,7 +101,7 @@ class AROV_EKF_Global(Node):
             return
 
         if odom_to_base_link is not None:
-            orientation = Rotation.from_quat([*self.state[4:], self.state[3]]) * Rotation.from_quat(
+            orientation = Rotation.from_quat([*self.state[4:7], self.state[3]]) * Rotation.from_quat(
                 [odom_to_base_link.transform.rotation.x,
                  odom_to_base_link.transform.rotation.y,
                  odom_to_base_link.transform.rotation.z,
@@ -268,8 +271,6 @@ class AROV_EKF_Global(Node):
 
                     self.correct(observation, observation_noise, h_expected, H_jacobian)
 
-                    # self.get_logger().info(f'{self.state}')
-
                     if self.ros_bag:
                         observed_orientation = Rotation.from_quat([map_to_tag.transform.rotation.x,
                                                                    map_to_tag.transform.rotation.y,
@@ -414,13 +415,13 @@ class AROV_EKF_Global(Node):
                                                self.odom_to_base_link_km1.transform.rotation.z,
                                                self.odom_to_base_link_km1.transform.rotation.w]).inv()
 
-            angular_prediction = (angular_diff * Rotation.from_quat([*self.state[4:], self.state[3]])).as_quat()
+            angular_prediction = (angular_diff * Rotation.from_quat([*self.state[4:7], self.state[3]])).as_quat()
 
             self.state[:3] += odom_to_map.inv().apply(linear_diff)
-            self.state[3:] = [angular_prediction[3], *angular_prediction[:3]]
+            self.state[3:7] = [angular_prediction[3], *angular_prediction[:3]]
 
             # Normalize quaternion
-            self.state[3:] = self.state[3:] / np.linalg.norm(self.state[3:])
+            self.state[3:7] = self.state[3:7] / np.linalg.norm(self.state[3:7])
 
             self.odom_to_base_link_km1 = odom_to_base_link
 
@@ -438,7 +439,7 @@ class AROV_EKF_Global(Node):
             predict_noise[:3, :3] = linear_noise
             predict_noise[3:, 3:] = angular_noise
 
-            self.cov = F @ self.cov @ F.transpose() + (predict_noise)
+            self.cov[:7,:7] = F @ self.cov[:7,:7] @ F.transpose() + predict_noise
 
     def correct(self, observation: np.ndarray, observation_noise: np.ndarray, h_expected: np.ndarray,
                 H_jacobian: np.ndarray):
@@ -461,7 +462,7 @@ class AROV_EKF_Global(Node):
         self.cov = (np.eye(np.shape(self.cov)[0]) - K_gain @ H_jacobian) @ self.cov
 
         # Normalize quaternion
-        self.state[3:] = self.state[3:] / np.linalg.norm(self.state[3:])
+        self.state[3:7] = self.state[3:7] / np.linalg.norm(self.state[3:7])
 
     def bag_testing(self, odom_to_base_link: TransformStamped):
         bag_odom = self.transform
