@@ -74,13 +74,13 @@ class AROV_EKF_Global(Node):
         self.cov = np.diag(self.get_parameter('~initial_cov').value)  # Covariance estimate
         self.known_tags = []
         self.fixed_tags = self.get_parameter('~fixed_tags').value
-        self.apriltag_noise = np.power(np.array([[0.1, 0, 0, 0, 0, 0, 0],
-                                                 [0, 0.1, 0, 0, 0, 0, 0],
-                                                 [0, 0, 0.1, 0, 0, 0, 0],
-                                                 [0, 0, 0, 0.5, 0.0, 0.0, 0.0],
-                                                 [0, 0, 0, 0.0, 0.5, 0.0, 0.0],
-                                                 [0, 0, 0, 0.0, 0.0, 0.5, 0.0],
-                                                 [0, 0, 0, 0.0, 0.0, 0.0, 0.5]]), 2)
+        self.apriltag_noise = np.power(np.array([[0.01, 0, 0, 0, 0, 0, 0],
+                                                 [0, 0.01, 0, 0, 0, 0, 0],
+                                                 [0, 0, 0.01, 0, 0, 0, 0],
+                                                 [0, 0, 0, 0.25, 0.0, 0.0, 0.0],
+                                                 [0, 0, 0, 0.0, 0.25, 0.0, 0.0],
+                                                 [0, 0, 0, 0.0, 0.0, 0.25, 0.0],
+                                                 [0, 0, 0, 0.0, 0.0, 0.0, 0.25]]), 2)
 
         self.predict_timer = self.create_timer(1.0 / 50.0, self.predict)
         self.pub_timer = self.create_timer(1.0 / 50.0, self.publish_transform)
@@ -154,6 +154,7 @@ class AROV_EKF_Global(Node):
                 base_link_to_tag = None
                 
                 if tag_frame in self.fixed_tags :
+                    # self.get_logger().info(f'{tag_frame}, fixed')
                     try:
                         map_to_tag = self.tf_buffer.lookup_transform(
                             'map',
@@ -163,10 +164,12 @@ class AROV_EKF_Global(Node):
                         continue
 
                 elif tag_frame not in self.known_tags :
+                    # self.get_logger().info(f'{tag_frame}, new')
                     self.add_tag_to_map(tag_frame)
                     continue
 
                 else :
+                    # self.get_logger().info(f'{tag_frame}, known')
                     map_to_tag = TransformStamped()
                     map_to_tag.header.stamp = self.get_clock().now().to_msg()
                     map_to_tag.header.frame_id = 'map'
@@ -192,6 +195,7 @@ class AROV_EKF_Global(Node):
                     continue
 
                 if base_link_to_tag is not None and map_to_tag is not None :
+                    # self.get_logger().info(f'{tag_frame}, correct')
                     base_link_to_tag = self.lowpass_filter(tag.id, base_link_to_tag)
 
                     observation = np.array([[base_link_to_tag.transform.translation.x],
@@ -298,7 +302,7 @@ class AROV_EKF_Global(Node):
                         H_jacobian = np.append(H_jacobian, H_tag, axis=1)
                         H_jacobian = np.append(H_jacobian, np.zeros((7, 7 * (len(self.known_tags) - tag_index - 1))), axis=1)
 
-                        observation_noise *= 3
+                        observation_noise *= 10
 
                     else :
                         H_jacobian = np.append(H_jacobian, np.zeros((7, len(self.known_tags) * 7)), axis=1)
