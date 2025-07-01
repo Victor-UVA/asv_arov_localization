@@ -336,9 +336,9 @@ class AROV_EKF_External(Node):
             self.odom_to_base_link_km1 = odom_to_base_link
 
             F = np.array([
-                [1, 0, 0, 0, 0, 0, 0],
-                [0, 1, 0, 0, 0, 0, 0],
-                [0, 0, 1, 0, 0, 0, 0],
+                [1, 0, 0, 2*(dx*wqr - yqr*dz + zqr*dy), 2*(dx*xqr + yqr*dy + zqr*dz), 2*(dx*-yqr - wqr*dz + dy*xqr), 2*(dx*-zqr + wqr*dy + dz*xqr)],
+                [0, 1, 0, 2*(dy*wqr - zqr*dx + xqr*dz), 2*(dy*-xqr + wqr*dz + dx*yqr), 2*(dy*yqr + xqr*dx + zqr*dz), 2*(dy*-zqr - wqr*dx + dz*yqr)],
+                [0, 0, 1, 2*(dz*wqr - xqr*dy + yqr*dx), 2*(dz*-xqr - wqr*dy + dx*zqr), 2*(dz*-yqr + wqr*dx + dy*zqr), 2*(dz*zqr + xqr*dx + yqr*dy)],
                 [0, 0, 0, dwq, -dxq, -dyq, -dzq],
                 [0, 0, 0, dxq, dwq, -dzq, dyq],
                 [0, 0, 0, dyq, dzq, dwq, -dxq],
