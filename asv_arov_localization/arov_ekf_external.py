@@ -28,7 +28,8 @@ class AROV_EKF_External(Node):
             ('~initial_cov', [5.0, 5.0, 5.0, 2.0, 2.0, 2.0, 2.0]),
             ('~predict_noise', [0.5, 0.5, 0.5, 0.025, 0.025, 0.025, 0.025]),            # Diagonals of the covariance matrix for the linear portion of prediction noise
             ('~apriltag_noise', [0.01, 0.01, 0.01, 0.025, 0.025, 0.025, 0.025]),
-            ('~camera_namespace', 'cam1')
+            ('~camera_namespaces', ['/arov', '/cam1', '/cam2', '/cam3', '/cam4']),
+            ('~arov_tag_ids', [7, 8, 9])
         ])
 
         self.ros_bag = self.get_parameter('~ros_bag').value
@@ -38,14 +39,41 @@ class AROV_EKF_External(Node):
             f'{self.get_namespace()}/odom',
             self.arov_pose_callback,
             10)
-        self.arov_pose_sub  # prevent unused variable warning
 
-        self.arov_apriltag_detect_sub = self.create_subscription(
-            AprilTagDetectionArray,
-            f'{self.get_parameter('~camera_namespace').value}/detections',
-            self.arov_apriltag_detect_callback,
-            10)
-        self.arov_apriltag_detect_sub  # prevent unused variable warning
+        self.arov_apriltag_sub = self.create_subscription(
+                AprilTagDetectionArray,
+                '/arov/detections',
+                self.arov_cam_callback,
+                10
+            )
+        
+        self.cam1_apriltag_sub = self.create_subscription(
+                AprilTagDetectionArray,
+                '/cam1/detections',
+                self.cam1_callback,
+                10
+            )
+        
+        self.cam2_apriltag_sub = self.create_subscription(
+                AprilTagDetectionArray,
+                '/cam2/detections',
+                self.cam2_callback,
+                10
+            )
+        
+        self.cam3_apriltag_sub = self.create_subscription(
+                AprilTagDetectionArray,
+                '/cam3/detections',
+                self.cam3_callback,
+                10
+            )
+        
+        self.cam4_apriltag_sub = self.create_subscription(
+                AprilTagDetectionArray,
+                '/cam4/detections',
+                self.cam4_callback,
+                10
+            )
 
         self.tf_broadcaster = TransformBroadcaster(self)
         self.tf_buffer = Buffer()
@@ -119,131 +147,111 @@ class AROV_EKF_External(Node):
     def arov_pose_callback(self, msg: Odometry):
         self.odom = msg
 
-    def arov_apriltag_detect_callback(self, msg: AprilTagDetectionArray):
+    def arov_cam_callback(self, msg) :
+        self.arov_apriltag_detect_callback(msg, '/arov')
+
+    def cam1_callback(self, msg) :
+        self.arov_apriltag_detect_callback(msg, '/cam1')
+
+    def cam2_callback(self, msg) :
+        self.arov_apriltag_detect_callback(msg, '/cam2')
+
+    def cam3_callback(self, msg) :
+        self.arov_apriltag_detect_callback(msg, '/cam3')
+
+    def cam4_callback(self, msg) :
+        self.arov_apriltag_detect_callback(msg, '/cam4')
+
+    def arov_apriltag_detect_callback(self, msg: AprilTagDetectionArray, namespace: str) :
         '''
         Runs full state correction using AprilTag detections whenever one or more AprilTags are observed.  Assumes a map of true AprilTag transforms
         is provided (can be static or dynamic).
         '''
-        if msg.detections:
-            for tag in msg.detections:
-                if tag.decision_margin < 20.0:
-                    continue
+        if namespace == '/arov' : return
 
-                tag_frame = f'{tag.family}:{tag.id}'
+        else :
+            if msg.detections:
+                for tag in msg.detections:
+                    if tag.decision_margin < 20.0 or tag.id not in self.get_parameter('~arov_tag_ids').value : continue
 
-                base_link_to_tag = None
-                map_to_tag = None
+                    tag_frame = f'{tag.family}:{tag.id}'
+                    tag_to_base_link = None
+                    map_to_tag = None
 
-                try:
-                    base_link_to_tag = self.tf_buffer.lookup_transform(
-                        f'{self.get_namespace().strip('/')}/base_link',
-                        tag_frame,
-                        rclpy.time.Time())
-                except TransformException as ex:
-                    continue
+                    try:
+                        tag_to_base_link = self.tf_buffer.lookup_transform(
+                            f'{tag_frame}_true',
+                            f'{self.get_namespace().strip('/')}/base_link',
+                            rclpy.time.Time())
+                    except TransformException as ex:
+                        continue
 
-                try:
-                    map_to_tag = self.tf_buffer.lookup_transform(
-                        'map',
-                        f'{tag_frame}_true',
-                        rclpy.time.Time())
-                except TransformException as ex:
-                    continue
+                    try:
+                        map_to_tag = self.tf_buffer.lookup_transform(
+                            'map',
+                            f'{tag_frame}_{namespace.strip('/')}',
+                            rclpy.time.Time())
+                    except TransformException as ex:
+                        continue
 
-                if base_link_to_tag is not None and map_to_tag is not None:
-                    base_link_to_tag = self.lowpass_filter(tag.id, base_link_to_tag)
-                    observation = np.array([[base_link_to_tag.transform.translation.x],
-                                            [base_link_to_tag.transform.translation.y],
-                                            [base_link_to_tag.transform.translation.z],
-                                            [base_link_to_tag.transform.rotation.w],
-                                            [base_link_to_tag.transform.rotation.x],
-                                            [base_link_to_tag.transform.rotation.y],
-                                            [base_link_to_tag.transform.rotation.z]])
+                    if tag_to_base_link is not None and map_to_tag is not None:
+                        map_to_tag = self.lowpass_filter(tag.id, map_to_tag)
 
-                    diff = np.array([map_to_tag.transform.translation.x - self.state[0],
-                                     map_to_tag.transform.translation.y - self.state[1],
-                                     map_to_tag.transform.translation.z - self.state[2]])
+                        tag_rot = Rotation.from_quat([
+                            map_to_tag.transform.rotation.x,
+                            map_to_tag.transform.rotation.y,
+                            map_to_tag.transform.rotation.z,
+                            map_to_tag.transform.rotation.w
+                        ])
 
-                    h_expected = np.array([[diff[0] * (
-                                self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[
-                            6] ** 2) + 2 * (-self.state[3] * self.state[5] * diff[2] + self.state[3] * self.state[6] *
-                                            diff[1] + self.state[4] * self.state[5] * diff[1] + self.state[4] *
-                                            self.state[6] * diff[2])],
-                                           [diff[1] * (self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 -
-                                                       self.state[6] ** 2) + 2 * (
-                                                        -self.state[3] * self.state[6] * diff[0] + self.state[3] *
-                                                        self.state[4] * diff[2] + self.state[5] * self.state[4] * diff[
-                                                            0] + self.state[5] * self.state[6] * diff[2])],
-                                           [diff[2] * (self.state[3] ** 2 - self.state[4] ** 2 - self.state[5] ** 2 +
-                                                       self.state[6] ** 2) + 2 * (
-                                                        -self.state[3] * self.state[4] * diff[1] + self.state[3] *
-                                                        self.state[5] * diff[0] + self.state[6] * self.state[4] * diff[
-                                                            0] + self.state[6] * self.state[5] * diff[1])],
-                                           [self.state[3] * map_to_tag.transform.rotation.w + self.state[
-                                               4] * map_to_tag.transform.rotation.x + self.state[
-                                                5] * map_to_tag.transform.rotation.y + self.state[
-                                                6] * map_to_tag.transform.rotation.z],
-                                           [-self.state[4] * map_to_tag.transform.rotation.w + self.state[
-                                               3] * map_to_tag.transform.rotation.x + self.state[
-                                                6] * map_to_tag.transform.rotation.y - self.state[
-                                                5] * map_to_tag.transform.rotation.z],
-                                           [-self.state[5] * map_to_tag.transform.rotation.w - self.state[
-                                               6] * map_to_tag.transform.rotation.x + self.state[
-                                                3] * map_to_tag.transform.rotation.y + self.state[
-                                                4] * map_to_tag.transform.rotation.z],
-                                           [-self.state[6] * map_to_tag.transform.rotation.w + self.state[
-                                               5] * map_to_tag.transform.rotation.x - self.state[
-                                                4] * map_to_tag.transform.rotation.y + self.state[
-                                                3] * map_to_tag.transform.rotation.z]])
+                        tag_translation = tag_rot.inv().apply(
+                            np.array([
+                                tag_to_base_link.transform.translation.x,
+                                tag_to_base_link.transform.translation.y,
+                                tag_to_base_link.transform.translation.z
+                            ])
+                        )
 
-                    H_jacobian = np.array([[-(
-                                self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[6] ** 2),
-                                            -2 * (self.state[3] * self.state[6] + self.state[4] * self.state[5]),
-                                            2 * (self.state[3] * self.state[5] - self.state[4] * self.state[6]), 2 * (
-                                                        diff[0] * self.state[3] - diff[2] * self.state[5] + diff[1] *
-                                                        self.state[6]), 2 * (
-                                                        diff[0] * self.state[4] + diff[1] * self.state[5] + diff[2] *
-                                                        self.state[6]), 2 * (
-                                                        -diff[0] * self.state[5] - diff[2] * self.state[3] + diff[1] *
-                                                        self.state[4]), 2 * (
-                                                        -diff[0] * self.state[6] + diff[1] * self.state[3] + diff[2] *
-                                                        self.state[4])],
-                                           [2 * (self.state[3] * self.state[6] - self.state[5] * self.state[4]), -(
-                                                       self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 -
-                                                       self.state[6] ** 2),
-                                            -2 * (self.state[3] * self.state[4] + self.state[5] * self.state[6]), 2 * (
-                                                        diff[1] * self.state[3] - diff[0] * self.state[6] + diff[2] *
-                                                        self.state[4]), 2 * (
-                                                        -diff[1] * self.state[4] + diff[2] * self.state[3] + diff[0] *
-                                                        self.state[5]), 2 * (
-                                                        diff[1] * self.state[5] + diff[0] * self.state[4] + diff[2] *
-                                                        self.state[6]), 2 * (
-                                                        -diff[1] * self.state[6] - diff[0] * self.state[3] + diff[2] *
-                                                        self.state[5])],
-                                           [-2 * (self.state[3] * self.state[5] + self.state[6] * self.state[4]),
-                                            2 * (self.state[3] * self.state[4] - self.state[6] * self.state[5]), -(
-                                                       self.state[3] ** 2 - self.state[4] ** 2 - self.state[5] ** 2 +
-                                                       self.state[6] ** 2), 2 * (
-                                                        diff[2] * self.state[3] - diff[1] * self.state[4] + diff[0] *
-                                                        self.state[5]), 2 * (
-                                                        -diff[2] * self.state[4] - diff[1] * self.state[3] + diff[0] *
-                                                        self.state[6]), 2 * (
-                                                        -diff[2] * self.state[5] + diff[0] * self.state[3] + diff[1] *
-                                                        self.state[6]), 2 * (
-                                                        diff[2] * self.state[6] + diff[0] * self.state[4] + diff[1] *
-                                                        self.state[5])],
-                                           [0, 0, 0, map_to_tag.transform.rotation.w, map_to_tag.transform.rotation.x,
-                                            map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z],
-                                           [0, 0, 0, map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w,
-                                            -map_to_tag.transform.rotation.z, map_to_tag.transform.rotation.y],
-                                           [0, 0, 0, map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z,
-                                            -map_to_tag.transform.rotation.w, -map_to_tag.transform.rotation.x],
-                                           [0, 0, 0, map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.y,
-                                            map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w]])
+                        base_link_rot = (Rotation.from_quat([
+                            tag_to_base_link.transform.rotation.x,
+                            tag_to_base_link.transform.rotation.y,
+                            tag_to_base_link.transform.rotation.z,
+                            tag_to_base_link.transform.rotation.w
+                        ]) * tag_rot).as_quat()
+                        
+                        observation = np.array([
+                            [map_to_tag.transform.translation.x + tag_translation[0]],
+                            [map_to_tag.transform.translation.y + tag_translation[1]],
+                            [map_to_tag.transform.translation.z + tag_translation[2]],
+                            [base_link_rot[3]],
+                            [base_link_rot[0]],
+                            [base_link_rot[1]],
+                            [base_link_rot[2]]
+                        ])
 
-                    observation_noise = self.apriltag_noise
+                        h_expected = np.array([
+                            [self.state[0]],
+                            [self.state[1]],
+                            [self.state[2]],
+                            [self.state[3]],
+                            [self.state[4]],
+                            [self.state[5]],
+                            [self.state[6]]
+                        ])
 
-                    # self.correct(observation, observation_noise, h_expected, H_jacobian)
+                        H_jacobian = np.array([
+                            [1, 0, 0, 0, 0, 0, 0],
+                            [0, 1, 0, 0, 0, 0, 0],
+                            [0, 0, 1, 0, 0, 0, 0],
+                            [0, 0, 0, 1, 0, 0, 0],
+                            [0, 0, 0, 0, 1, 0, 0],
+                            [0, 0, 0, 0, 0, 1, 0],
+                            [0, 0, 0, 0, 0, 0, 1]
+                        ])
+
+                        observation_noise = self.apriltag_noise
+
+                        self.correct(observation, observation_noise, h_expected, H_jacobian)
 
     def predict(self):
         '''
