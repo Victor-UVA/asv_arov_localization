@@ -20,7 +20,8 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'arov_ekf_global = asv_arov_localization.arov_ekf_global:main'
+            'arov_ekf_global = asv_arov_localization.arov_ekf_global:main',
+            'arov_ekf_external = asv_arov_localization.arov_ekf_external:main'
         ],
     },
 )
