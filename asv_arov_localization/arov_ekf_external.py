@@ -40,39 +40,15 @@ class AROV_EKF_External(Node):
             self.arov_pose_callback,
             10)
 
-        self.arov_apriltag_sub = self.create_subscription(
-                AprilTagDetectionArray,
-                '/arov/detections',
-                self.arov_cam_callback,
-                10
-            )
-        
-        self.cam1_apriltag_sub = self.create_subscription(
-                AprilTagDetectionArray,
-                '/cam1/detections',
-                self.cam1_callback,
-                10
-            )
-        
-        self.cam2_apriltag_sub = self.create_subscription(
-                AprilTagDetectionArray,
-                '/cam2/detections',
-                self.cam2_callback,
-                10
-            )
-        
-        self.cam3_apriltag_sub = self.create_subscription(
-                AprilTagDetectionArray,
-                '/cam3/detections',
-                self.cam3_callback,
-                10
-            )
-        
-        self.cam4_apriltag_sub = self.create_subscription(
-                AprilTagDetectionArray,
-                '/cam4/detections',
-                self.cam4_callback,
-                10
+        self.apriltag_subs = []
+        for namespace in self.get_parameter('~camera_namespaces').value :
+            self.apriltag_subs.append(
+                self.create_subscription(
+                    AprilTagDetectionArray,
+                    f'{namespace}/detections',
+                    self.apriltag_detect_callback,
+                    10
+                )
             )
 
         self.tf_broadcaster = TransformBroadcaster(self)
@@ -147,30 +123,14 @@ class AROV_EKF_External(Node):
     def arov_pose_callback(self, msg: Odometry):
         self.odom = msg
 
-    def arov_cam_callback(self, msg) :
-        self.arov_apriltag_detect_callback(msg, '/arov')
-
-    def cam1_callback(self, msg) :
-        self.arov_apriltag_detect_callback(msg, '/cam1')
-
-    def cam2_callback(self, msg) :
-        self.arov_apriltag_detect_callback(msg, '/cam2')
-
-    def cam3_callback(self, msg) :
-        self.arov_apriltag_detect_callback(msg, '/cam3')
-
-    def cam4_callback(self, msg) :
-        self.arov_apriltag_detect_callback(msg, '/cam4')
-
-    def arov_apriltag_detect_callback(self, msg: AprilTagDetectionArray, namespace: str) :
+    def apriltag_detect_callback(self, msg: AprilTagDetectionArray) :
         '''
-        Runs full state correction using AprilTag detections whenever one or more AprilTags are observed.  Assumes a map of true AprilTag transforms
-        is provided (can be static or dynamic).
+        Runs full state correction using AprilTag detections whenever one or more AprilTags are observed.
         '''
-        if namespace == '/arov' : return
+        if msg.detections:
+            namespace = msg.header.frame_id[:-7]
 
-        else :
-            if msg.detections:
+            if namespace in self.get_parameter('~camera_namespaces').value :
                 for tag in msg.detections:
                     if tag.decision_margin < 20.0 or tag.id not in self.get_parameter('~arov_tag_ids').value : continue
 
