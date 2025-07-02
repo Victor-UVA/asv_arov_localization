@@ -19,3 +19,6 @@ Check the package executables were installed correctly, should see a list of the
 ```
 ros2 pkg executables pcl_ros
 ```
+
+## Setting up Barlus Cameras
+- Go into settings and add the ethernet connection with the subnet mask and gateway for the camera (find in the device manager if needed)

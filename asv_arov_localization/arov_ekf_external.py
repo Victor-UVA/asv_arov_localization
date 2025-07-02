@@ -26,7 +26,7 @@ class AROV_EKF_External(Node):
         self.declare_parameters(namespace='', parameters=[
             ('~ros_bag', True),                                                         # Toggle for using bagged data and switching to sending test transforms
             ('~initial_cov', [5.0, 5.0, 5.0, 2.0, 2.0, 2.0, 2.0]),
-            ('~predict_noise', [0.5, 0.5, 0.5, 0.025, 0.025, 0.025, 0.025]),            # Diagonals of the covariance matrix for the linear portion of prediction noise
+            ('~predict_noise', [0.75, 0.75, 0.75, 0.025, 0.025, 0.025, 0.025]),            # Diagonals of the covariance matrix for the linear portion of prediction noise
             ('~apriltag_noise', [0.01, 0.01, 0.01, 0.025, 0.025, 0.025, 0.025]),
             ('~camera_namespaces', ['/arov', '/cam1', '/cam2', '/cam3', '/cam4']),
             ('~arov_tag_ids', [7, 8, 9])
@@ -127,6 +127,8 @@ class AROV_EKF_External(Node):
         '''
         Runs full state correction using AprilTag detections whenever one or more AprilTags are observed.
         '''
+        if self.state is None : return
+
         if msg.detections:
             namespace = msg.header.frame_id[:-7]
 
@@ -155,7 +157,7 @@ class AROV_EKF_External(Node):
                         continue
 
                     if tag_to_base_link is not None and map_to_tag is not None:
-                        map_to_tag = self.lowpass_filter(tag.id, map_to_tag)
+                        # map_to_tag = self.lowpass_filter(tag.id, map_to_tag)
 
                         tag_rot = Rotation.from_quat([
                             map_to_tag.transform.rotation.x,
@@ -172,17 +174,17 @@ class AROV_EKF_External(Node):
                             ])
                         )
 
-                        base_link_rot = (Rotation.from_quat([
+                        base_link_rot = (tag_rot * Rotation.from_quat([
                             tag_to_base_link.transform.rotation.x,
                             tag_to_base_link.transform.rotation.y,
                             tag_to_base_link.transform.rotation.z,
                             tag_to_base_link.transform.rotation.w
-                        ]) * tag_rot).as_quat()
+                        ])).as_quat()
                         
                         observation = np.array([
-                            [map_to_tag.transform.translation.x + tag_translation[0]],
-                            [map_to_tag.transform.translation.y + tag_translation[1]],
-                            [map_to_tag.transform.translation.z + tag_translation[2]],
+                            [map_to_tag.transform.translation.x - tag_translation[0]],
+                            [map_to_tag.transform.translation.y - tag_translation[1]],
+                            [map_to_tag.transform.translation.z - tag_translation[2]],
                             [base_link_rot[3]],
                             [base_link_rot[0]],
                             [base_link_rot[1]],
@@ -240,6 +242,8 @@ class AROV_EKF_External(Node):
 
                 self.time_km1 = self.get_clock().now()
                 self.odom_to_base_link_km1 = odom_to_base_link
+
+                self.publish_transform()
             return
 
         if odom_to_base_link is not None:
