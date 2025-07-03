@@ -27,7 +27,7 @@ class AROV_EKF_External(Node):
             ('~ros_bag', True),                                                         # Toggle for using bagged data and switching to sending test transforms
             ('~initial_cov', [5.0, 5.0, 5.0, 2.0, 2.0, 2.0, 2.0]),
             ('~predict_noise', [0.75, 0.75, 0.75, 0.025, 0.025, 0.025, 0.025]),            # Diagonals of the covariance matrix for the linear portion of prediction noise
-            ('~apriltag_noise', [0.01, 0.01, 0.01, 0.025, 0.025, 0.025, 0.025]),
+            ('~apriltag_noise', [0.1, 0.1, 0.1, 0.025, 0.025, 0.025, 0.025]),
             ('~camera_namespaces', ['/arov', '/cam1', '/cam2', '/cam3', '/cam4']),
             ('~arov_tag_ids', [7, 8, 9])
         ])
@@ -166,7 +166,7 @@ class AROV_EKF_External(Node):
                             map_to_tag.transform.rotation.w
                         ])
 
-                        tag_translation = tag_rot.inv().apply(
+                        tag_translation = tag_rot.apply(
                             np.array([
                                 tag_to_base_link.transform.translation.x,
                                 tag_to_base_link.transform.translation.y,
@@ -182,9 +182,9 @@ class AROV_EKF_External(Node):
                         ])).as_quat()
                         
                         observation = np.array([
-                            [map_to_tag.transform.translation.x - tag_translation[0]],
-                            [map_to_tag.transform.translation.y - tag_translation[1]],
-                            [map_to_tag.transform.translation.z - tag_translation[2]],
+                            [map_to_tag.transform.translation.x + tag_translation[0]],
+                            [map_to_tag.transform.translation.y + tag_translation[1]],
+                            [map_to_tag.transform.translation.z + tag_translation[2]],
                             [base_link_rot[3]],
                             [base_link_rot[0]],
                             [base_link_rot[1]],
