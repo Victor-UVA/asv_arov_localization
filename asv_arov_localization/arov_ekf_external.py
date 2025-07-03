@@ -157,7 +157,7 @@ class AROV_EKF_External(Node):
                         continue
 
                     if tag_to_base_link is not None and map_to_tag is not None:
-                        # map_to_tag = self.lowpass_filter(tag.id, map_to_tag)
+                        map_to_tag = self.lowpass_filter(tag.id, map_to_tag)
 
                         tag_rot = Rotation.from_quat([
                             map_to_tag.transform.rotation.x,
@@ -396,8 +396,8 @@ class AROV_EKF_External(Node):
         flt_data['quat'].append(orientation)
 
         # Difference eq LPF for pose
-        flt_pose = self.pose_coeffs[0][0] * flt_data['pose'][1] + self.pose_coeffs[0][1] * flt_data['pose'][0] - self.pose_coeffs[1][1] * flt_data['flt_pose'][0]
-        flt_data['flt_pose'].append(flt_pose)
+        # flt_pose = self.pose_coeffs[0][0] * flt_data['pose'][1] + self.pose_coeffs[0][1] * flt_data['pose'][0] - self.pose_coeffs[1][1] * flt_data['flt_pose'][0]
+        # flt_data['flt_pose'].append(flt_pose)
 
         # Adaptive LPF for quaternion
         quat_alpha = self.base_quat_alpha * (1 + self.quat_sens * 2 * np.arccos(np.clip(np.abs(np.dot(flt_data['quat'][1], flt_data['quat'][0])), -1, 1)))
@@ -408,9 +408,10 @@ class AROV_EKF_External(Node):
 
         filtered_transform = TransformStamped()
         filtered_transform.header = transform.header
-        filtered_transform.transform.translation.x = flt_pose[0]
-        filtered_transform.transform.translation.y = flt_pose[1]
-        filtered_transform.transform.translation.z = flt_pose[2]
+        # filtered_transform.transform.translation.x = flt_pose[0]
+        # filtered_transform.transform.translation.y = flt_pose[1]
+        # filtered_transform.transform.translation.z = flt_pose[2]
+        filtered_transform.transform.translation = transform.transform.translation
         filtered_transform.transform.rotation.x = flt_quat[0]
         filtered_transform.transform.rotation.y = flt_quat[1]
         filtered_transform.transform.rotation.z = flt_quat[2]
