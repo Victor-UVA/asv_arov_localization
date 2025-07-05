@@ -26,8 +26,8 @@ class AROV_EKF_External(Node):
         self.declare_parameters(namespace='', parameters=[
             ('~ros_bag', True),                                                         # Toggle for using bagged data and switching to sending test transforms
             ('~initial_cov', [5.0, 5.0, 5.0, 2.0, 2.0, 2.0, 2.0]),
-            ('~predict_noise', [0.75, 0.75, 0.75, 0.025, 0.025, 0.025, 0.025]),            # Diagonals of the covariance matrix for the linear portion of prediction noise
-            ('~apriltag_noise', [0.1, 0.1, 0.1, 0.025, 0.025, 0.025, 0.025]),
+            ('~predict_noise', [0.75, 0.75, 0.75, 0.025, 0.025, 0.025, 0.025]),         # Diagonals of the covariance matrix for the linear portion of prediction noise
+            ('~apriltag_noise', [0.1, 0.1, 0.1, 0.25, 0.25, 0.25, 0.25]),
             ('~camera_namespaces', ['/arov', '/cam1', '/cam2', '/cam3', '/cam4']),
             ('~arov_tag_ids', [7, 8, 9])
         ])
