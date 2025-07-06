@@ -4,9 +4,10 @@ import numpy as np
 import math
 from collections import deque
 
-from geometry_msgs.msg import TransformStamped, Quaternion
+from geometry_msgs.msg import TransformStamped
 from nav_msgs.msg import Odometry
 from apriltag_msgs.msg import AprilTagDetectionArray
+from sensor_msgs.msg import Imu
 
 import rclpy.time
 from tf2_ros import TransformBroadcaster, TransformException
@@ -25,9 +26,11 @@ class AROV_EKF_External(Node):
         super().__init__('arov_ekf_external')
         self.declare_parameters(namespace='', parameters=[
             ('~ros_bag', True),                                                         # Toggle for using bagged data and switching to sending test transforms
+            ('~use_gyro', False),                                                       # Whether to use an external gyro for predict or the PixHawk estimate
             ('~initial_cov', [5.0, 5.0, 5.0, 2.0, 2.0, 2.0, 2.0]),
             ('~predict_noise', [0.75, 0.75, 0.75, 0.025, 0.025, 0.025, 0.025]),         # Diagonals of the covariance matrix for the linear portion of prediction noise
-            ('~apriltag_noise', [0.1, 0.1, 0.1, 0.25, 0.25, 0.25, 0.25]),
+            ('~gyro_noise', [0.025, 0.025, 0.025]),
+            ('~apriltag_noise', [0.15, 0.15, 0.15, 0.25, 0.25, 0.25, 0.25]),
             ('~camera_namespaces', ['/arov', '/cam1', '/cam2', '/cam3', '/cam4']),
             ('~arov_tag_ids', [7, 8, 9])
         ])
@@ -50,6 +53,16 @@ class AROV_EKF_External(Node):
                     10
                 )
             )
+
+        if self.get_parameter('~use_gyro').value :
+            self.gyro_sub = self.create_subscription(
+                                Imu,
+                                f'{self.get_namespace()}/bno055/gyro',
+                                self.gyro_callback,
+                                10
+                            )
+            
+            self.gyro = Imu()
 
         self.tf_broadcaster = TransformBroadcaster(self)
         self.tf_buffer = Buffer()
@@ -120,8 +133,11 @@ class AROV_EKF_External(Node):
             else:
                 self.bag_testing(odom_to_base_link)
 
-    def arov_pose_callback(self, msg: Odometry):
+    def arov_pose_callback(self, msg: Odometry) :
         self.odom = msg
+
+    def gyro_callback(self, msg: Imu) :
+        self.gyro = msg
 
     def apriltag_detect_callback(self, msg: AprilTagDetectionArray) :
         '''
@@ -251,6 +267,14 @@ class AROV_EKF_External(Node):
             dt = (time_k - self.time_km1).nanoseconds / 10.0 ** 9  # Time since last prediction
             self.time_km1 = time_k
 
+            xr = self.state[0]
+            yr = self.state[1]
+            zr = self.state[2]
+            wqr = self.state[3]
+            xqr = self.state[4]
+            yqr = self.state[5]
+            zqr = self.state[6]
+
             # Linear prediction
             linear_diff = Rotation.from_quat([
                 self.odom_to_base_link_km1.transform.rotation.x,
@@ -269,55 +293,85 @@ class AROV_EKF_External(Node):
             dy = linear_diff[1]
             dz = linear_diff[2]
 
-            # Angular prediction
-            angular_diff = (Rotation.from_quat([odom_to_base_link.transform.rotation.x,
-                                                odom_to_base_link.transform.rotation.y,
-                                                odom_to_base_link.transform.rotation.z,
-                                                odom_to_base_link.transform.rotation.w]) * \
-                            Rotation.from_quat([self.odom_to_base_link_km1.transform.rotation.x,
-                                                self.odom_to_base_link_km1.transform.rotation.y,
-                                                self.odom_to_base_link_km1.transform.rotation.z,
-                                                self.odom_to_base_link_km1.transform.rotation.w]).inv()).as_quat()
+            if self.get_parameter('~use_gyro').value :
+                # Angular prediction
+                angular_diff = (Rotation.from_quat([odom_to_base_link.transform.rotation.x,
+                                                    odom_to_base_link.transform.rotation.y,
+                                                    odom_to_base_link.transform.rotation.z,
+                                                    odom_to_base_link.transform.rotation.w]) * \
+                                Rotation.from_quat([self.odom_to_base_link_km1.transform.rotation.x,
+                                                    self.odom_to_base_link_km1.transform.rotation.y,
+                                                    self.odom_to_base_link_km1.transform.rotation.z,
+                                                    self.odom_to_base_link_km1.transform.rotation.w]).inv()).as_quat()
 
-            dwq = angular_diff[3]
-            dxq = angular_diff[0]
-            dyq = angular_diff[1]
-            dzq = angular_diff[2]
+                dwq = angular_diff[3]
+                dxq = angular_diff[0]
+                dyq = angular_diff[1]
+                dzq = angular_diff[2]
 
-            xr = self.state[0]
-            yr = self.state[1]
-            zr = self.state[2]
-            wqr = self.state[3]
-            xqr = self.state[4]
-            yqr = self.state[5]
-            zqr = self.state[6]
+                self.state = np.array([
+                    xr + dx*(wqr**2 + xqr**2 - yqr**2 - zqr**2) + 2*(wqr*-yqr*dz + wqr*zqr*dy + yqr*dy*xqr + zqr*dz*xqr),
+                    yr + dy*(wqr**2 - xqr**2 + yqr**2 - zqr**2) + 2*(wqr*-zqr*dx + wqr*xqr*dz + xqr*dx*yqr + zqr*dz*yqr),
+                    zr + dz*(wqr**2 - xqr**2 - yqr**2 + zqr**2) + 2*(wqr*-xqr*dy + wqr*yqr*dx + xqr*dx*zqr + yqr*dy*zqr),
+                    wqr * dwq - xqr * dxq - yqr * dyq - zqr * dzq,
+                    wqr * dxq + xqr * dwq - yqr * dzq + zqr * dyq,
+                    wqr * dyq + xqr * dzq + yqr * dwq - zqr * dxq,
+                    wqr * dzq - xqr * dyq + yqr * dxq + zqr * dwq
+                ])
 
-            self.state = np.array([
-                xr + dx*(wqr**2 + xqr**2 - yqr**2 - zqr**2) + 2*(wqr*-yqr*dz + wqr*zqr*dy + yqr*dy*xqr + zqr*dz*xqr),
-                yr + dy*(wqr**2 - xqr**2 + yqr**2 - zqr**2) + 2*(wqr*-zqr*dx + wqr*xqr*dz + xqr*dx*yqr + zqr*dz*yqr),
-                zr + dz*(wqr**2 - xqr**2 - yqr**2 + zqr**2) + 2*(wqr*-xqr*dy + wqr*yqr*dx + xqr*dx*zqr + yqr*dy*zqr),
-                wqr * dwq - xqr * dxq - yqr * dyq - zqr * dzq,
-                wqr * dxq + xqr * dwq - yqr * dzq + zqr * dyq,
-                wqr * dyq + xqr * dzq + yqr * dwq - zqr * dxq,
-                wqr * dzq - xqr * dyq + yqr * dxq + zqr * dwq
-            ])
+
+                F = np.array([
+                    [1, 0, 0, 2*(dx*wqr - yqr*dz + zqr*dy), 2*(dx*xqr + yqr*dy + zqr*dz), 2*(dx*-yqr - wqr*dz + dy*xqr), 2*(dx*-zqr + wqr*dy + dz*xqr)],
+                    [0, 1, 0, 2*(dy*wqr - zqr*dx + xqr*dz), 2*(dy*-xqr + wqr*dz + dx*yqr), 2*(dy*yqr + xqr*dx + zqr*dz), 2*(dy*-zqr - wqr*dx + dz*yqr)],
+                    [0, 0, 1, 2*(dz*wqr - xqr*dy + yqr*dx), 2*(dz*-xqr - wqr*dy + dx*zqr), 2*(dz*-yqr + wqr*dx + dy*zqr), 2*(dz*zqr + xqr*dx + yqr*dy)],
+                    [0, 0, 0, dwq, -dxq, -dyq, -dzq],
+                    [0, 0, 0, dxq, dwq, -dzq, dyq],
+                    [0, 0, 0, dyq, dzq, dwq, -dxq],
+                    [0, 0, 0, dzq, -dyq, dxq, dwq]
+                ])
+            
+            else :
+                # Angular prediction (w 3, x 4, y 5, z 6) witih gyro
+                # Gyro rates
+                gxdot = self.gyro.angular_velocity.x
+                gydot = self.gyro.angular_velocity.y
+                gzdot = self.gyro.angular_velocity.z
+
+                self.state[3:] = np.array([
+                    wqr - (dt/2) * gxdot * xqr - (dt/2) * gydot * yqr - (dt/2) * gzdot * zqr,
+                    xqr + (dt/2) * gxdot * wqr - (dt/2) * gydot * zqr + (dt/2) * gzdot * yqr,
+                    yqr + (dt/2) * gxdot * zqr + (dt/2) * gydot * wqr - (dt/2) * gzdot * xqr,
+                    zqr - (dt/2) * gxdot * yqr + (dt/2) * gydot * xqr + (dt/2) * gzdot * wqr
+                    ])
+
+                F = np.array([
+                    [1, 0, 0, 2*(dx*wqr - yqr*dz + zqr*dy), 2*(dx*xqr + yqr*dy + zqr*dz), 2*(dx*-yqr - wqr*dz + dy*xqr), 2*(dx*-zqr + wqr*dy + dz*xqr)],
+                    [0, 1, 0, 2*(dy*wqr - zqr*dx + xqr*dz), 2*(dy*-xqr + wqr*dz + dx*yqr), 2*(dy*yqr + xqr*dx + zqr*dz), 2*(dy*-zqr - wqr*dx + dz*yqr)],
+                    [0, 0, 1, 2*(dz*wqr - xqr*dy + yqr*dx), 2*(dz*-xqr - wqr*dy + dx*zqr), 2*(dz*-yqr + wqr*dx + dy*zqr), 2*(dz*zqr + xqr*dx + yqr*dy)],
+                    [0, 0, 0, 1, -(dt/2) * gxdot, -(dt/2) * gydot, -(dt/2) * gzdot],
+                    [0, 0, 0, (dt/2) * gxdot, 1, (dt/2) * gzdot, -(dt/2) * gydot],
+                    [0, 0, 0, (dt/2) * gydot, -(dt/2) * gzdot, 1, (dt/2) * gxdot],
+                    [0, 0, 0, (dt/2) * gzdot, (dt/2) * gydot, -(dt/2) * gxdot, 1]
+                    ])
+                
+                linear_noise = dt * np.power(np.diag(self.get_parameter('~predict_noise').value[:3]), 2)
+                
+                W_k = (dt/2) * np.array([[-xqr, -yqr, -zqr],
+                                        [wqr, -zqr, yqr],
+                                        [zqr, wqr, -xqr],
+                                        [-yqr, xqr, wqr]])
+                angular_noise = W_k @ np.power(np.diag(self.get_parameter('~gyro_noise').value), 2) @ W_k.transpose()
+
+                predict_noise = np.zeros((7, 7))
+                predict_noise[:3, :3] = linear_noise
+                predict_noise[3:, 3:] = angular_noise
+
+            self.cov = F @ self.cov @ F.transpose() + (self.predict_noise)
 
             # Normalize quaternion
             self.state[3:] = self.state[3:] / np.linalg.norm(self.state[3:])
 
             self.odom_to_base_link_km1 = odom_to_base_link
-
-            F = np.array([
-                [1, 0, 0, 2*(dx*wqr - yqr*dz + zqr*dy), 2*(dx*xqr + yqr*dy + zqr*dz), 2*(dx*-yqr - wqr*dz + dy*xqr), 2*(dx*-zqr + wqr*dy + dz*xqr)],
-                [0, 1, 0, 2*(dy*wqr - zqr*dx + xqr*dz), 2*(dy*-xqr + wqr*dz + dx*yqr), 2*(dy*yqr + xqr*dx + zqr*dz), 2*(dy*-zqr - wqr*dx + dz*yqr)],
-                [0, 0, 1, 2*(dz*wqr - xqr*dy + yqr*dx), 2*(dz*-xqr - wqr*dy + dx*zqr), 2*(dz*-yqr + wqr*dx + dy*zqr), 2*(dz*zqr + xqr*dx + yqr*dy)],
-                [0, 0, 0, dwq, -dxq, -dyq, -dzq],
-                [0, 0, 0, dxq, dwq, -dzq, dyq],
-                [0, 0, 0, dyq, dzq, dwq, -dxq],
-                [0, 0, 0, dzq, -dyq, dxq, dwq]
-            ])
-
-            self.cov = F @ self.cov @ F.transpose() + (self.predict_noise)
             
             self.publish_transform()
 
