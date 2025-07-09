@@ -29,8 +29,8 @@ class AROV_EKF_External(Node):
             ('~use_gyro', False),                                                       # Whether to use an external gyro for predict or the PixHawk estimate
             ('~initial_cov', [5.0, 5.0, 5.0, 2.0, 2.0, 2.0, 2.0]),
             ('~predict_noise', [0.75, 0.75, 0.75, 0.025, 0.025, 0.025, 0.025]),         # Diagonals of the covariance matrix for the linear portion of prediction noise
-            ('~gyro_noise', [0.025, 0.025, 0.025]),
-            ('~apriltag_noise', [0.15, 0.15, 0.15, 0.25, 0.25, 0.25, 0.25]),
+            ('~gyro_noise', [0.25, 0.25, 0.25]),
+            ('~apriltag_noise', [0.35, 0.35, 0.35, 0.00125, 0.00125, 0.00125, 0.00125]),
             ('~camera_namespaces', ['/arov', '/cam1', '/cam2', '/cam3', '/cam4']),
             ('~arov_tag_ids', [7, 8, 9])
         ])
@@ -81,6 +81,8 @@ class AROV_EKF_External(Node):
 
         self.predict_noise = np.power(np.diag(self.get_parameter('~predict_noise').value), 2)
         self.apriltag_noise = np.power(np.diag(self.get_parameter('~apriltag_noise').value), 2)
+
+        self.observations = deque([], maxlen=10)
 
         self.predict_timer = self.create_timer(1.0 / 50.0, self.predict)
 
@@ -150,7 +152,7 @@ class AROV_EKF_External(Node):
 
             if namespace in self.get_parameter('~camera_namespaces').value :
                 for tag in msg.detections:
-                    if tag.decision_margin < 20.0 or tag.id not in self.get_parameter('~arov_tag_ids').value : continue
+                    if tag.decision_margin < 10.0 or tag.id not in self.get_parameter('~arov_tag_ids').value : continue
 
                     tag_frame = f'{tag.family}:{tag.id}'
                     tag_to_base_link = None
@@ -173,7 +175,7 @@ class AROV_EKF_External(Node):
                         continue
 
                     if tag_to_base_link is not None and map_to_tag is not None:
-                        map_to_tag = self.lowpass_filter(tag.id, map_to_tag)
+                        # map_to_tag = self.lowpass_filter(tag.id, map_to_tag)
 
                         tag_rot = Rotation.from_quat([
                             map_to_tag.transform.rotation.x,
@@ -229,7 +231,30 @@ class AROV_EKF_External(Node):
 
                         observation_noise = self.apriltag_noise
 
-                        self.correct(observation, observation_noise, h_expected, H_jacobian)
+                        # self.correct(observation, observation_noise, h_expected, H_jacobian)
+
+                        self.observations.append(observation.transpose()[0])
+
+                        self.state = np.mean(self.observations, axis=0)
+
+                        # Normalize quaternion
+                        self.state[3:] = self.state[3:] / np.linalg.norm(self.state[3:])
+
+                        observed_arov = TransformStamped()
+                        observed_arov.child_frame_id = f'arov_observed_{tag_frame}'
+                        observed_arov.header.frame_id = 'map'
+                        observed_arov.header.stamp = self.get_clock().now().to_msg()
+
+                        observed_arov.transform.translation.x = observation[0][0]
+                        observed_arov.transform.translation.y = observation[1][0]
+                        observed_arov.transform.translation.z = observation[2][0]
+
+                        observed_arov.transform.rotation.w = observation[3][0]
+                        observed_arov.transform.rotation.x = observation[4][0]
+                        observed_arov.transform.rotation.y = observation[5][0]
+                        observed_arov.transform.rotation.z = observation[6][0]
+
+                        self.tf_broadcaster.sendTransform(observed_arov)
 
     def predict(self):
         '''
@@ -293,7 +318,7 @@ class AROV_EKF_External(Node):
             dy = linear_diff[1]
             dz = linear_diff[2]
 
-            if self.get_parameter('~use_gyro').value :
+            if not self.get_parameter('~use_gyro').value :
                 # Angular prediction
                 angular_diff = (Rotation.from_quat([odom_to_base_link.transform.rotation.x,
                                                     odom_to_base_link.transform.rotation.y,
@@ -337,12 +362,15 @@ class AROV_EKF_External(Node):
                 gydot = self.gyro.angular_velocity.y
                 gzdot = self.gyro.angular_velocity.z
 
-                self.state[3:] = np.array([
+                self.state = np.array([
+                    xr + dx*(wqr**2 + xqr**2 - yqr**2 - zqr**2) + 2*(wqr*-yqr*dz + wqr*zqr*dy + yqr*dy*xqr + zqr*dz*xqr),
+                    yr + dy*(wqr**2 - xqr**2 + yqr**2 - zqr**2) + 2*(wqr*-zqr*dx + wqr*xqr*dz + xqr*dx*yqr + zqr*dz*yqr),
+                    zr + dz*(wqr**2 - xqr**2 - yqr**2 + zqr**2) + 2*(wqr*-xqr*dy + wqr*yqr*dx + xqr*dx*zqr + yqr*dy*zqr),
                     wqr - (dt/2) * gxdot * xqr - (dt/2) * gydot * yqr - (dt/2) * gzdot * zqr,
                     xqr + (dt/2) * gxdot * wqr - (dt/2) * gydot * zqr + (dt/2) * gzdot * yqr,
                     yqr + (dt/2) * gxdot * zqr + (dt/2) * gydot * wqr - (dt/2) * gzdot * xqr,
                     zqr - (dt/2) * gxdot * yqr + (dt/2) * gydot * xqr + (dt/2) * gzdot * wqr
-                    ])
+                ])
 
                 F = np.array([
                     [1, 0, 0, 2*(dx*wqr - yqr*dz + zqr*dy), 2*(dx*xqr + yqr*dy + zqr*dz), 2*(dx*-yqr - wqr*dz + dy*xqr), 2*(dx*-zqr + wqr*dy + dz*xqr)],
