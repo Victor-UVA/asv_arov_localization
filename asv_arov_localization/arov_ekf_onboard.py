@@ -82,7 +82,7 @@ class AROV_EKF_Onboard(Node):
         self.predict_noise = np.power(np.diag(self.get_parameter('~predict_noise').value), 2)
         self.apriltag_noise = np.power(np.diag(self.get_parameter('~apriltag_noise').value), 2)
 
-        self.observations = deque([], maxlen=10)
+        self.observations = deque([], maxlen=5)
 
         self.predict_timer = self.create_timer(1.0 / 50.0, self.predict)
 
@@ -152,7 +152,7 @@ class AROV_EKF_Onboard(Node):
 
             if namespace in self.get_parameter('~camera_namespaces').value :
                 for tag in msg.detections:
-                    if tag.decision_margin < 10.0 or tag.id not in self.get_parameter('~arov_tag_ids').value : continue
+                    if tag.decision_margin < 10.0 : continue
 
                     tag_frame = f'{tag.family}:{tag.id}'
                     base_link_to_tag = None
@@ -160,7 +160,7 @@ class AROV_EKF_Onboard(Node):
 
                     try:
                         base_link_to_tag = self.tf_buffer.lookup_transform(
-                        f'{self.arov}/base_link',
+                        f'{self.get_namespace().strip('/')}/base_link',
                         tag_frame,
                             rclpy.time.Time())
                     except TransformException as ex:
@@ -175,40 +175,43 @@ class AROV_EKF_Onboard(Node):
                         continue
 
                     if base_link_to_tag is not None and map_to_tag is not None:
-                        # map_to_tag = self.lowpass_filter(tag.id, map_to_tag)
+                        base_link_to_tag = self.lowpass_filter(tag.id, base_link_to_tag)
 
-                        tag_rot = Rotation.from_quat([
-                            map_to_tag.transform.rotation.x,
-                            map_to_tag.transform.rotation.y,
-                            map_to_tag.transform.rotation.z,
-                            map_to_tag.transform.rotation.w
-                        ])
-
-                        tag_translation = tag_rot.apply(
-                            np.array([
-                                base_link_to_tag.transform.translation.x,
-                                base_link_to_tag.transform.translation.y,
-                                base_link_to_tag.transform.translation.z
-                            ])
-                        )
-
-                        base_link_rot = (tag_rot * Rotation.from_quat([
-                            base_link_to_tag.transform.rotation.x,
-                            base_link_to_tag.transform.rotation.y,
-                            base_link_to_tag.transform.rotation.z,
-                            base_link_to_tag.transform.rotation.w
-                        ])).as_quat()
+                        observed_orientation = Rotation.from_quat([map_to_tag.transform.rotation.x,
+                                                                map_to_tag.transform.rotation.y,
+                                                                map_to_tag.transform.rotation.z,
+                                                                map_to_tag.transform.rotation.w]) *\
+                                            Rotation.from_quat([base_link_to_tag.transform.rotation.x,
+                                                                base_link_to_tag.transform.rotation.y,
+                                                                base_link_to_tag.transform.rotation.z,
+                                                                base_link_to_tag.transform.rotation.w]).inv()
                         
-                        observation = np.array([
-                            [map_to_tag.transform.translation.x + tag_translation[0]],
-                            [map_to_tag.transform.translation.y + tag_translation[1]],
-                            [map_to_tag.transform.translation.z + tag_translation[2]],
-                            [base_link_rot[3]],
-                            [base_link_rot[0]],
-                            [base_link_rot[1]],
-                            [base_link_rot[2]]
-                        ])
+                        tag_in_map = observed_orientation.apply(np.array([base_link_to_tag.transform.translation.x,
+                                                                        base_link_to_tag.transform.translation.y, 
+                                                                        base_link_to_tag.transform.translation.z]))
+                        
+                        observed_orientation = observed_orientation.as_quat()
 
+                        observation = np.array([
+                            [map_to_tag.transform.translation.x - tag_in_map[0]],
+                            [map_to_tag.transform.translation.y - tag_in_map[1]],
+                            [map_to_tag.transform.translation.z - tag_in_map[2]],
+                            [observed_orientation[3]],
+                            [observed_orientation[0]],
+                            [observed_orientation[1]],
+                            [observed_orientation[2]]
+                            ])
+                                            
+                        H_jacobian = np.array([
+                            [1, 0, 0, 0, 0, 0, 0],
+                            [0, 1, 0, 0, 0, 0, 0],
+                            [0, 0, 1, 0, 0, 0, 0],
+                            [0, 0, 0, 1, 0, 0, 0],
+                            [0, 0, 0, 0, 1, 0, 0],
+                            [0, 0, 0, 0, 0, 1, 0],
+                            [0, 0, 0, 0, 0, 0, 1]
+                            ])
+                        
                         h_expected = np.array([
                             [self.state[0]],
                             [self.state[1]],
@@ -219,15 +222,57 @@ class AROV_EKF_Onboard(Node):
                             [self.state[6]]
                         ])
 
-                        H_jacobian = np.array([
-                            [1, 0, 0, 0, 0, 0, 0],
-                            [0, 1, 0, 0, 0, 0, 0],
-                            [0, 0, 1, 0, 0, 0, 0],
-                            [0, 0, 0, 1, 0, 0, 0],
-                            [0, 0, 0, 0, 1, 0, 0],
-                            [0, 0, 0, 0, 0, 1, 0],
-                            [0, 0, 0, 0, 0, 0, 1]
-                        ])
+                        # tag_rot = Rotation.from_quat([
+                        #     map_to_tag.transform.rotation.x,
+                        #     map_to_tag.transform.rotation.y,
+                        #     map_to_tag.transform.rotation.z,
+                        #     map_to_tag.transform.rotation.w
+                        # ])
+
+                        # tag_translation = tag_rot.apply(
+                        #     np.array([
+                        #         base_link_to_tag.transform.translation.x,
+                        #         base_link_to_tag.transform.translation.y,
+                        #         base_link_to_tag.transform.translation.z
+                        #     ])
+                        # )
+
+                        # base_link_rot = (tag_rot * Rotation.from_quat([
+                        #     base_link_to_tag.transform.rotation.x,
+                        #     base_link_to_tag.transform.rotation.y,
+                        #     base_link_to_tag.transform.rotation.z,
+                        #     base_link_to_tag.transform.rotation.w
+                        # ])).as_quat()
+                        
+                        # observation = np.array([
+                        #     [map_to_tag.transform.translation.x + tag_translation[0]],
+                        #     [map_to_tag.transform.translation.y + tag_translation[1]],
+                        #     [map_to_tag.transform.translation.z + tag_translation[2]],
+                        #     [base_link_rot[3]],
+                        #     [base_link_rot[0]],
+                        #     [base_link_rot[1]],
+                        #     [base_link_rot[2]]
+                        # ])
+
+                        # h_expected = np.array([
+                        #     [self.state[0]],
+                        #     [self.state[1]],
+                        #     [self.state[2]],
+                        #     [self.state[3]],
+                        #     [self.state[4]],
+                        #     [self.state[5]],
+                        #     [self.state[6]]
+                        # ])
+
+                        # H_jacobian = np.array([
+                        #     [1, 0, 0, 0, 0, 0, 0],
+                        #     [0, 1, 0, 0, 0, 0, 0],
+                        #     [0, 0, 1, 0, 0, 0, 0],
+                        #     [0, 0, 0, 1, 0, 0, 0],
+                        #     [0, 0, 0, 0, 1, 0, 0],
+                        #     [0, 0, 0, 0, 0, 1, 0],
+                        #     [0, 0, 0, 0, 0, 0, 1]
+                        # ])
 
                         observation_noise = self.apriltag_noise
 
