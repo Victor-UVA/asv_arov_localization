@@ -30,7 +30,7 @@ class AROV_EKF_Onboard(Node):
             ('~initial_cov', [5.0, 5.0, 5.0, 2.0, 2.0, 2.0, 2.0]),
             ('~predict_noise', [0.75, 0.75, 0.75, 0.025, 0.025, 0.025, 0.025]),         # Diagonals of the covariance matrix for the linear portion of prediction noise
             ('~gyro_noise', [0.25, 0.25, 0.25]),
-            ('~apriltag_noise', [0.35, 0.35, 0.35, 0.00125, 0.00125, 0.00125, 0.00125]),
+            ('~apriltag_noise', [0.025, 0.025, 0.025, 0.0125, 0.0125, 0.0125, 0.0125]),
             ('~camera_namespaces', ['/arov']),
             ('~arov_tag_ids', [7, 8, 9])
         ])
@@ -88,9 +88,9 @@ class AROV_EKF_Onboard(Node):
 
         self.tag_data = {}  # id / translation / orientation / filtered translation / filtered orientation
         self.base_trns_alpha = 0.245
-        self.trns_sens = 0.25
+        self.trns_sens = 0.75
         self.base_quat_alpha = 0.245
-        self.quat_sens = 0.75
+        self.quat_sens = 0.25
 
     def publish_transform(self) :
         if self.state is None : return
@@ -175,18 +175,23 @@ class AROV_EKF_Onboard(Node):
                     if base_link_to_tag is not None and map_to_tag is not None:
                         base_link_to_tag = self.lowpass_filter(tag.id, base_link_to_tag)
 
-                        observed_orientation = Rotation.from_quat([map_to_tag.transform.rotation.x,
-                                                                map_to_tag.transform.rotation.y,
-                                                                map_to_tag.transform.rotation.z,
-                                                                map_to_tag.transform.rotation.w]) *\
-                                            Rotation.from_quat([base_link_to_tag.transform.rotation.x,
-                                                                base_link_to_tag.transform.rotation.y,
-                                                                base_link_to_tag.transform.rotation.z,
-                                                                base_link_to_tag.transform.rotation.w]).inv()
+                        observed_orientation = Rotation.from_quat([
+                            map_to_tag.transform.rotation.x,
+                            map_to_tag.transform.rotation.y,
+                            map_to_tag.transform.rotation.z,
+                            map_to_tag.transform.rotation.w
+                            ]) * Rotation.from_quat([
+                            base_link_to_tag.transform.rotation.x,
+                            base_link_to_tag.transform.rotation.y,
+                            base_link_to_tag.transform.rotation.z,
+                            base_link_to_tag.transform.rotation.w
+                            ]).inv()
                         
-                        tag_in_map = observed_orientation.apply(np.array([base_link_to_tag.transform.translation.x,
-                                                                        base_link_to_tag.transform.translation.y, 
-                                                                        base_link_to_tag.transform.translation.z]))
+                        tag_in_map = observed_orientation.apply(np.array([
+                            base_link_to_tag.transform.translation.x,
+                            base_link_to_tag.transform.translation.y,
+                            base_link_to_tag.transform.translation.z
+                            ]))
                         
                         observed_orientation = observed_orientation.as_quat()
 
@@ -272,7 +277,11 @@ class AROV_EKF_Onboard(Node):
                         #     [0, 0, 0, 0, 0, 0, 1]
                         # ])
 
-                        observation_noise = self.apriltag_noise
+                        observation_noise = self.apriltag_noise * np.linalg.norm(np.array([
+                            base_link_to_tag.transform.translation.x,
+                            base_link_to_tag.transform.translation.y,
+                            base_link_to_tag.transform.translation.z
+                        ])) ** 2
 
                         self.correct(observation, observation_noise, h_expected, H_jacobian)
 
@@ -521,9 +530,9 @@ class AROV_EKF_Onboard(Node):
         flt_data['quat'].append(orientation)
 
         # Adaptive LPF for translation
-        trns_alpha = self.base_trns_alpha * (1 + self.trns_sens * 2 * np.linalg.norm(flt_data['trns'][1] - flt_data['trns'][0]))
+        trns_alpha = self.base_trns_alpha * (1 + self.trns_sens * np.linalg.norm(flt_data['trns'][1] - flt_data['trns'][0]))
         trns_alpha = np.clip(trns_alpha, 0.05, 0.5)
-        flt_trns = trns_alpha * flt_data['trns'][1] * (1 - trns_alpha) * flt_data['flt_trns'][0]
+        flt_trns = trns_alpha * flt_data['trns'][1] + (1 - trns_alpha) * flt_data['flt_trns'][0]
         flt_data['flt_trns'].append(flt_trns)
 
         # Adaptive LPF for quaternion
