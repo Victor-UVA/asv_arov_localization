@@ -87,12 +87,10 @@ class AROV_EKF_Onboard(Node):
         self.predict_timer = self.create_timer(1.0 / 50.0, self.predict)
 
         self.tag_data = {}  # id / translation / orientation / filtered translation / filtered orientation
-        pose_f0 = 0.1
-        Fs = 25
-        pose_alpha = 1 - math.exp(-2 * math.pi * pose_f0/ Fs)
-        self.pose_coeffs = [[1.2*pose_alpha, -0.2*pose_alpha], [1.0, pose_alpha-1]]
-        self.base_quat_alpha = 0.1
-        self.quat_sens = 0.5
+        self.base_trns_alpha = 0.245
+        self.trns_sens = 0.25
+        self.base_quat_alpha = 0.245
+        self.quat_sens = 0.75
 
     def publish_transform(self) :
         if self.state is None : return
@@ -276,11 +274,11 @@ class AROV_EKF_Onboard(Node):
 
                         observation_noise = self.apriltag_noise
 
-                        # self.correct(observation, observation_noise, h_expected, H_jacobian)
+                        self.correct(observation, observation_noise, h_expected, H_jacobian)
 
                         self.observations.append(observation.transpose()[0])
 
-                        self.state = np.mean(self.observations, axis=0)
+                        # self.state = np.mean(self.observations, axis=0)
 
                         # Normalize quaternion
                         self.state[3:] = self.state[3:] / np.linalg.norm(self.state[3:])
@@ -510,21 +508,23 @@ class AROV_EKF_Onboard(Node):
                                 transform.transform.rotation.w], dtype=np.float64)
 
         if id not in self.tag_data:  # create dictionary entry and fill it
-            self.tag_data[id] = {'pose': deque([translation.copy()], maxlen=2), # populate with current translation once, append second on next go
+            self.tag_data[id] = {'trns': deque([translation.copy()], maxlen=2), # populate with current translation once, append second on next go
                                  'quat': deque([orientation.copy()], maxlen=2), # populate with current orientation once, append second on next go
-                                 'flt_pose': deque([translation.copy()], maxlen=2), # same, append with filtered data on next go
+                                 'flt_trns': deque([translation.copy()], maxlen=2), # same, append with filtered data on next go
                                  'flt_quat': deque([orientation.copy()], maxlen=2)} # same, append with filtered data on next go
             return transform
 
         flt_data = self.tag_data[id]
-        flt_data['pose'].append(translation)
+        flt_data['trns'].append(translation)
         if np.dot(orientation, flt_data['quat'][0]) < 0.0:  # test for quaternion flip
             orientation *= -1
         flt_data['quat'].append(orientation)
 
-        # Difference eq LPF for pose
-        # flt_pose = self.pose_coeffs[0][0] * flt_data['pose'][1] + self.pose_coeffs[0][1] * flt_data['pose'][0] - self.pose_coeffs[1][1] * flt_data['flt_pose'][0]
-        # flt_data['flt_pose'].append(flt_pose)
+        # Adaptive LPF for translation
+        trns_alpha = self.base_trns_alpha * (1 + self.trns_sens * 2 * np.linalg.norm(flt_data['trns'][1] - flt_data['trns'][0]))
+        trns_alpha = np.clip(trns_alpha, 0.05, 0.5)
+        flt_trns = trns_alpha * flt_data['trns'][1] * (1 - trns_alpha) * flt_data['flt_trns'][0]
+        flt_data['flt_trns'].append(flt_trns)
 
         # Adaptive LPF for quaternion
         quat_alpha = self.base_quat_alpha * (1 + self.quat_sens * 2 * np.arccos(np.clip(np.abs(np.dot(flt_data['quat'][1], flt_data['quat'][0])), -1, 1)))
@@ -535,10 +535,10 @@ class AROV_EKF_Onboard(Node):
 
         filtered_transform = TransformStamped()
         filtered_transform.header = transform.header
-        # filtered_transform.transform.translation.x = flt_pose[0]
-        # filtered_transform.transform.translation.y = flt_pose[1]
-        # filtered_transform.transform.translation.z = flt_pose[2]
-        filtered_transform.transform.translation = transform.transform.translation
+        filtered_transform.transform.translation.x = flt_trns[0]
+        filtered_transform.transform.translation.y = flt_trns[1]
+        filtered_transform.transform.translation.z = flt_trns[2]
+        # filtered_transform.transform.translation = transform.transform.translation
         filtered_transform.transform.rotation.x = flt_quat[0]
         filtered_transform.transform.rotation.y = flt_quat[1]
         filtered_transform.transform.rotation.z = flt_quat[2]
