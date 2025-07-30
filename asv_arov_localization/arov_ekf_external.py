@@ -271,7 +271,7 @@ class AROV_EKF_External(Node):
         except TransformException as ex:
             return
         
-        if self.state is None or self.odom is None:
+        if self.state is None:
             if odom_to_base_link is not None:
                 self.state = np.array([odom_to_base_link.transform.translation.x,
                                        odom_to_base_link.transform.translation.y,
@@ -401,7 +401,7 @@ class AROV_EKF_External(Node):
 
             self.odom_to_base_link_km1 = odom_to_base_link
             
-            self.publish_transform()
+        self.publish_transform()
 
     def correct(self, observation: np.ndarray, observation_noise: np.ndarray, h_expected: np.ndarray,
                 H_jacobian: np.ndarray):
