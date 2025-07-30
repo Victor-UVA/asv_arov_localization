@@ -175,69 +175,69 @@ class AROV_EKF_Onboard(Node):
                     if base_link_to_tag is not None and map_to_tag is not None:
                         base_link_to_tag = self.lowpass_filter(tag.id, base_link_to_tag)
 
-                        observation = np.array([[base_link_to_tag.transform.translation.x],
-                                                [base_link_to_tag.transform.translation.y],
-                                                [base_link_to_tag.transform.translation.z],
-                                                [base_link_to_tag.transform.rotation.w],
-                                                [base_link_to_tag.transform.rotation.x],
-                                                [base_link_to_tag.transform.rotation.y],
-                                                [base_link_to_tag.transform.rotation.z]])
+                        # observation = np.array([[base_link_to_tag.transform.translation.x],
+                        #                         [base_link_to_tag.transform.translation.y],
+                        #                         [base_link_to_tag.transform.translation.z],
+                        #                         [base_link_to_tag.transform.rotation.w],
+                        #                         [base_link_to_tag.transform.rotation.x],
+                        #                         [base_link_to_tag.transform.rotation.y],
+                        #                         [base_link_to_tag.transform.rotation.z]])
 
-                        diff = np.array([map_to_tag.transform.translation.x - self.state[0],
-                                        map_to_tag.transform.translation.y - self.state[1],
-                                        map_to_tag.transform.translation.z - self.state[2]])
+                        # diff = np.array([map_to_tag.transform.translation.x - self.state[0],
+                        #                 map_to_tag.transform.translation.y - self.state[1],
+                        #                 map_to_tag.transform.translation.z - self.state[2]])
 
-                        h_expected = np.array([
-                            [diff[0] * (self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[6] ** 2) + 2 * (-self.state[3] * self.state[5] * diff[2] + self.state[3] * self.state[6] * diff[1] + self.state[4] * self.state[5] * diff[1] + self.state[4] * self.state[6] * diff[2])],
-                            [diff[1] * (self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 - self.state[6] ** 2) + 2 * (-self.state[3] * self.state[6] * diff[0] + self.state[3] * self.state[4] * diff[2] + self.state[5] * self.state[4] * diff[0] + self.state[5] * self.state[6] * diff[2])],
-                            [diff[2] * (self.state[3] ** 2 - self.state[4] ** 2 - self.state[5] ** 2 + self.state[6] ** 2) + 2 * (-self.state[3] * self.state[4] * diff[1] + self.state[3] * self.state[5] * diff[0] + self.state[6] * self.state[4] * diff[0] + self.state[6] * self.state[5] * diff[1])],
-                            [self.state[3] * map_to_tag.transform.rotation.w + self.state[4] * map_to_tag.transform.rotation.x + self.state[5] * map_to_tag.transform.rotation.y + self.state[6] * map_to_tag.transform.rotation.z],
-                            [-self.state[4] * map_to_tag.transform.rotation.w + self.state[3] * map_to_tag.transform.rotation.x + self.state[6] * map_to_tag.transform.rotation.y - self.state[5] * map_to_tag.transform.rotation.z],
-                            [-self.state[5] * map_to_tag.transform.rotation.w - self.state[6] * map_to_tag.transform.rotation.x + self.state[3] * map_to_tag.transform.rotation.y + self.state[4] * map_to_tag.transform.rotation.z],
-                            [-self.state[6] * map_to_tag.transform.rotation.w + self.state[5] * map_to_tag.transform.rotation.x - self.state[4] * map_to_tag.transform.rotation.y + self.state[3] * map_to_tag.transform.rotation.z]
-                            ])
+                        # h_expected = np.array([
+                        #     [diff[0] * (self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[6] ** 2) + 2 * (-self.state[3] * self.state[5] * diff[2] + self.state[3] * self.state[6] * diff[1] + self.state[4] * self.state[5] * diff[1] + self.state[4] * self.state[6] * diff[2])],
+                        #     [diff[1] * (self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 - self.state[6] ** 2) + 2 * (-self.state[3] * self.state[6] * diff[0] + self.state[3] * self.state[4] * diff[2] + self.state[5] * self.state[4] * diff[0] + self.state[5] * self.state[6] * diff[2])],
+                        #     [diff[2] * (self.state[3] ** 2 - self.state[4] ** 2 - self.state[5] ** 2 + self.state[6] ** 2) + 2 * (-self.state[3] * self.state[4] * diff[1] + self.state[3] * self.state[5] * diff[0] + self.state[6] * self.state[4] * diff[0] + self.state[6] * self.state[5] * diff[1])],
+                        #     [self.state[3] * map_to_tag.transform.rotation.w + self.state[4] * map_to_tag.transform.rotation.x + self.state[5] * map_to_tag.transform.rotation.y + self.state[6] * map_to_tag.transform.rotation.z],
+                        #     [-self.state[4] * map_to_tag.transform.rotation.w + self.state[3] * map_to_tag.transform.rotation.x + self.state[6] * map_to_tag.transform.rotation.y - self.state[5] * map_to_tag.transform.rotation.z],
+                        #     [-self.state[5] * map_to_tag.transform.rotation.w - self.state[6] * map_to_tag.transform.rotation.x + self.state[3] * map_to_tag.transform.rotation.y + self.state[4] * map_to_tag.transform.rotation.z],
+                        #     [-self.state[6] * map_to_tag.transform.rotation.w + self.state[5] * map_to_tag.transform.rotation.x - self.state[4] * map_to_tag.transform.rotation.y + self.state[3] * map_to_tag.transform.rotation.z]
+                        #     ])
 
-                        H_jacobian = np.array([
-                            [-(self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[6] ** 2), -2 * (self.state[3] * self.state[6] + self.state[4] * self.state[5]), 2 * (self.state[3] * self.state[5] - self.state[4] * self.state[6]), 2 * (diff[0] * self.state[3] - diff[2] * self.state[5] + diff[1] * self.state[6]), 2 * (diff[0] * self.state[4] + diff[1] * self.state[5] + diff[2] * self.state[6]), 2 * (-diff[0] * self.state[5] - diff[2] * self.state[3] + diff[1] * self.state[4]), 2 * (-diff[0] * self.state[6] + diff[1] * self.state[3] + diff[2] * self.state[4])],
-                            [2 * (self.state[3] * self.state[6] - self.state[5] * self.state[4]), -(self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 - self.state[6] ** 2), -2 * (self.state[3] * self.state[4] + self.state[5] * self.state[6]), 2 * (diff[1] * self.state[3] - diff[0] * self.state[6] + diff[2] * self.state[4]), 2 * (-diff[1] * self.state[4] + diff[2] * self.state[3] + diff[0] * self.state[5]), 2 * (diff[1] * self.state[5] + diff[0] * self.state[4] + diff[2] * self.state[6]), 2 * (-diff[1] * self.state[6] - diff[0] * self.state[3] + diff[2] * self.state[5])],
-                            [-2 * (self.state[3] * self.state[5] + self.state[6] * self.state[4]), 2 * (self.state[3] * self.state[4] - self.state[6] * self.state[5]), -(self.state[3] ** 2 - self.state[4] ** 2 - self.state[5] ** 2 + self.state[6] ** 2), 2 * (diff[2] * self.state[3] - diff[1] * self.state[4] + diff[0] * self.state[5]), 2 * (-diff[2] * self.state[4] - diff[1] * self.state[3] + diff[0] * self.state[6]), 2 * (-diff[2] * self.state[5] + diff[0] * self.state[3] + diff[1] * self.state[6]), 2 * (diff[2] * self.state[6] + diff[0] * self.state[4] + diff[1] * self.state[5])],
-                            [0, 0, 0, map_to_tag.transform.rotation.w, map_to_tag.transform.rotation.x, map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z],
-                            [0, 0, 0, map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w, -map_to_tag.transform.rotation.z, map_to_tag.transform.rotation.y],
-                            [0, 0, 0, map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.w, -map_to_tag.transform.rotation.x],
-                            [0, 0, 0, map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w]
-                            ])
+                        # H_jacobian = np.array([
+                        #     [-(self.state[3] ** 2 + self.state[4] ** 2 - self.state[5] ** 2 - self.state[6] ** 2), -2 * (self.state[3] * self.state[6] + self.state[4] * self.state[5]), 2 * (self.state[3] * self.state[5] - self.state[4] * self.state[6]), 2 * (diff[0] * self.state[3] - diff[2] * self.state[5] + diff[1] * self.state[6]), 2 * (diff[0] * self.state[4] + diff[1] * self.state[5] + diff[2] * self.state[6]), 2 * (-diff[0] * self.state[5] - diff[2] * self.state[3] + diff[1] * self.state[4]), 2 * (-diff[0] * self.state[6] + diff[1] * self.state[3] + diff[2] * self.state[4])],
+                        #     [2 * (self.state[3] * self.state[6] - self.state[5] * self.state[4]), -(self.state[3] ** 2 - self.state[4] ** 2 + self.state[5] ** 2 - self.state[6] ** 2), -2 * (self.state[3] * self.state[4] + self.state[5] * self.state[6]), 2 * (diff[1] * self.state[3] - diff[0] * self.state[6] + diff[2] * self.state[4]), 2 * (-diff[1] * self.state[4] + diff[2] * self.state[3] + diff[0] * self.state[5]), 2 * (diff[1] * self.state[5] + diff[0] * self.state[4] + diff[2] * self.state[6]), 2 * (-diff[1] * self.state[6] - diff[0] * self.state[3] + diff[2] * self.state[5])],
+                        #     [-2 * (self.state[3] * self.state[5] + self.state[6] * self.state[4]), 2 * (self.state[3] * self.state[4] - self.state[6] * self.state[5]), -(self.state[3] ** 2 - self.state[4] ** 2 - self.state[5] ** 2 + self.state[6] ** 2), 2 * (diff[2] * self.state[3] - diff[1] * self.state[4] + diff[0] * self.state[5]), 2 * (-diff[2] * self.state[4] - diff[1] * self.state[3] + diff[0] * self.state[6]), 2 * (-diff[2] * self.state[5] + diff[0] * self.state[3] + diff[1] * self.state[6]), 2 * (diff[2] * self.state[6] + diff[0] * self.state[4] + diff[1] * self.state[5])],
+                        #     [0, 0, 0, map_to_tag.transform.rotation.w, map_to_tag.transform.rotation.x, map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z],
+                        #     [0, 0, 0, map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w, -map_to_tag.transform.rotation.z, map_to_tag.transform.rotation.y],
+                        #     [0, 0, 0, map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.w, -map_to_tag.transform.rotation.x],
+                        #     [0, 0, 0, map_to_tag.transform.rotation.z, -map_to_tag.transform.rotation.y, map_to_tag.transform.rotation.x, -map_to_tag.transform.rotation.w]
+                        #     ])
                         
                         ## Global observation
 
-                        # observed_orientation = Rotation.from_quat([
-                        #     map_to_tag.transform.rotation.x,
-                        #     map_to_tag.transform.rotation.y,
-                        #     map_to_tag.transform.rotation.z,
-                        #     map_to_tag.transform.rotation.w
-                        #     ]) * Rotation.from_quat([
-                        #     base_link_to_tag.transform.rotation.x,
-                        #     base_link_to_tag.transform.rotation.y,
-                        #     base_link_to_tag.transform.rotation.z,
-                        #     base_link_to_tag.transform.rotation.w
-                        #     ]).inv()
+                        observed_orientation = Rotation.from_quat([
+                            map_to_tag.transform.rotation.x,
+                            map_to_tag.transform.rotation.y,
+                            map_to_tag.transform.rotation.z,
+                            map_to_tag.transform.rotation.w
+                            ]) * Rotation.from_quat([
+                            base_link_to_tag.transform.rotation.x,
+                            base_link_to_tag.transform.rotation.y,
+                            base_link_to_tag.transform.rotation.z,
+                            base_link_to_tag.transform.rotation.w
+                            ]).inv()
                         
-                        # tag_in_map = observed_orientation.apply(np.array([
-                        #     base_link_to_tag.transform.translation.x,
-                        #     base_link_to_tag.transform.translation.y,
-                        #     base_link_to_tag.transform.translation.z
-                        #     ]))
+                        tag_in_map = observed_orientation.apply(np.array([
+                            base_link_to_tag.transform.translation.x,
+                            base_link_to_tag.transform.translation.y,
+                            base_link_to_tag.transform.translation.z
+                            ]))
                         
-                        # observed_orientation = observed_orientation.as_quat()
+                        observed_orientation = observed_orientation.as_quat()
 
-                        # observation = np.array([
-                        #     [map_to_tag.transform.translation.x - tag_in_map[0]],
-                        #     [map_to_tag.transform.translation.y - tag_in_map[1]],
-                        #     [map_to_tag.transform.translation.z - tag_in_map[2]],
-                        #     [observed_orientation[3]],
-                        #     [observed_orientation[0]],
-                        #     [observed_orientation[1]],
-                        #     [observed_orientation[2]]
-                        #     ])
+                        observation = np.array([
+                            [map_to_tag.transform.translation.x - tag_in_map[0]],
+                            [map_to_tag.transform.translation.y - tag_in_map[1]],
+                            [map_to_tag.transform.translation.z - tag_in_map[2]],
+                            [observed_orientation[3]],
+                            [observed_orientation[0]],
+                            [observed_orientation[1]],
+                            [observed_orientation[2]]
+                            ])
                                             
                         # H_jacobian = np.array([
                         #     [1, 0, 0, 0, 0, 0, 0],
@@ -319,11 +319,11 @@ class AROV_EKF_Onboard(Node):
                             base_link_to_tag.transform.translation.z
                         ])) ** 2
 
-                        self.correct(observation, observation_noise, h_expected, H_jacobian)
+                        # self.correct(observation, observation_noise, h_expected, H_jacobian)
 
                         self.observations.append(observation.transpose()[0])
 
-                        # self.state = np.mean(self.observations, axis=0)
+                        self.state = np.mean(self.observations, axis=0)
 
                         # Normalize quaternion
                         self.state[3:] = self.state[3:] / np.linalg.norm(self.state[3:])
